@@ -1,0 +1,24 @@
+{
+  "name": "visual-uiai",
+  "version": "1.0.0",
+  "description": "Visual UI-AI Studio: Multi-platform visual component inspector, AI redesign workbench, and workspace code patcher.",
+  "scripts": {
+    "dev:server": "cd server && npm run dev",
+    "dev:client": "cd client && npm run dev",
+    "test:server": "cd server && npm run test",
+    "test:client": "cd client && npm run test",
+    "test": "npm run test:server && npm run test:client",
+    "build": "cd client && npm run build && cd ../server && npm run build"
+  },
+  "keywords": [
+    "ui-ux",
+    "ai",
+    "component-inspector",
+    "redesign",
+    "locator",
+    "adb",
+    "wcag"
+  ],
+  "author": "",
+  "license": "MIT"
+}

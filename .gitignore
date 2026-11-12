@@ -1,0 +1,62 @@
+# Dependencies
+node_modules/
+*/node_modules/
+package-lock.json.bak
+
+# Build and Distribution Outputs
+dist/
+*/dist/
+build/
+*/build/
+out/
+.next/
+
+# Logs and Debugging
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Environment Variables & Secrets
+.env
+.env.*
+!.env.example
+*.local
+
+# Editor & OS Metadata
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Testing & Cache
+.vite/
+*/.vite/
+.vitest-cache/
+*/.vitest-cache/
+coverage/
+*/coverage/
+.turbo/
+
+# Backups & Temp Files
+*.bak
+*.bak-*
+*.tmp
+*.temp
+
+# Research Documentation (Ignored as requested)
+research/
+research.md
+RESEARCH.md
