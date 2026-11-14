@@ -100,6 +100,19 @@ export const Header: React.FC<HeaderProps> = ({
           <Monitor className="w-3.5 h-3.5" />
           <span>Desktop</span>
         </button>
+
+        <button
+          onClick={() => onPlatformChange('workspace')}
+          className={`flex items-center gap-1.5 px-3 py-1 rounded text-xs font-medium transition-all ${
+            platform === 'workspace'
+              ? 'bg-indigo-600 text-white shadow-sm'
+              : 'text-studio-400 hover:text-white hover:bg-studio-800/50'
+          }`}
+          title="Inspect Real Workspace Components"
+        >
+          <FolderGit2 className="w-3.5 h-3.5" />
+          <span>Workspace</span>
+        </button>
       </div>
 
       {/* Action Tools */}

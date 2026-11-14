@@ -1,0 +1,12 @@
+{
+  "name": "fixture-web-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Multi-framework web fixture for Visual UI E2E testing",
+  "dependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "vue": "^3.5.0",
+    "svelte": "^5.0.0"
+  }
+}

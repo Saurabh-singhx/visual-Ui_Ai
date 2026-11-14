@@ -19,6 +19,7 @@ interface VisualCanvasProps {
   isSnipMode: boolean;
   onSnipComplete: (box: BoundingBox) => void;
   redesignedCode?: string;
+  matchedFileContent?: string;
 }
 
 export const VisualCanvas: React.FC<VisualCanvasProps> = ({
@@ -28,11 +29,13 @@ export const VisualCanvas: React.FC<VisualCanvasProps> = ({
   isSnipMode,
   onSnipComplete,
   redesignedCode,
+  matchedFileContent,
 }) => {
   const [zoom, setZoom] = useState<number>(1);
   const [hoveredElementId, setHoveredElementId] = useState<string | null>(null);
   const [showSplitCompare, setShowSplitCompare] = useState<boolean>(false);
   const [splitSliderPos, setSplitSliderPos] = useState<number>(50);
+  const [showInCanvasPreview, setShowInCanvasPreview] = useState<boolean>(true);
 
   // Snip drag state
   const [isDragging, setIsDragging] = useState<boolean>(false);
@@ -327,8 +330,67 @@ export const VisualCanvas: React.FC<VisualCanvasProps> = ({
           )}
         </div>
 
-        {/* View Controls */}
+        {/* View Controls & Responsive Breakpoints */}
         <div className="flex items-center gap-2">
+          {/* Responsive Breakpoint Presets: Mobile (375px), Tablet (768px), Desktop (1200px) */}
+          <div className="flex items-center bg-studio-800 rounded-lg p-0.5 border border-studio-700">
+            <button
+              type="button"
+              onClick={() => {
+                if (currentApp) {
+                  currentApp.viewport = { ...currentApp.viewport, width: 375, height: 667 };
+                  fitToScreen();
+                }
+              }}
+              className="px-2 py-0.5 hover:text-white rounded hover:bg-studio-700 text-studio-400 text-[11px]"
+              title="Mobile Viewport (375px)"
+            >
+              Mobile 375px
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (currentApp) {
+                  currentApp.viewport = { ...currentApp.viewport, width: 768, height: 1024 };
+                  fitToScreen();
+                }
+              }}
+              className="px-2 py-0.5 hover:text-white rounded hover:bg-studio-700 text-studio-400 text-[11px]"
+              title="Tablet Viewport (768px)"
+            >
+              Tablet 768px
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (currentApp) {
+                  currentApp.viewport = { ...currentApp.viewport, width: 1200, height: 800 };
+                  fitToScreen();
+                }
+              }}
+              className="px-2 py-0.5 hover:text-white rounded hover:bg-studio-700 text-studio-400 text-[11px]"
+              title="Desktop Viewport (1200px)"
+            >
+              Desktop 1200px
+            </button>
+          </div>
+          {redesignedCode && (
+            <button
+              onClick={() => setShowInCanvasPreview(!showInCanvasPreview)}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-xs transition-colors border ${
+                showInCanvasPreview
+                  ? 'bg-cyan-600 text-white border-cyan-500 shadow-sm'
+                  : 'bg-studio-800 text-studio-400 border-studio-700 hover:text-white'
+              }`}
+              title="Toggle AI redesign on canvas"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>
+                {showInCanvasPreview ? 'AI Redesign: ON' : 'AI Redesign: OFF'}
+              </span>
+            </button>
+          )}
+
           {redesignedCode && (
             <button
               onClick={() => setShowSplitCompare(!showSplitCompare)}
@@ -529,8 +591,74 @@ export const VisualCanvas: React.FC<VisualCanvasProps> = ({
               </div>
             )}
 
+            {/* Workspace Live Application Canvas */}
+            {!currentApp.screenshotUrl && !currentApp.iframeUrl && currentApp.isWorkspace && (
+              <div className="w-full h-full bg-slate-950 text-white font-sans relative overflow-hidden p-6 select-none">
+                {/* Workspace Top Status Bar */}
+                <div className="flex items-center justify-between text-xs text-slate-400 border-b border-slate-800/80 pb-2 mb-4">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block animate-pulse" />
+                    <span className="font-semibold text-white">{currentApp.name}</span>
+                    <span className="text-slate-500">•</span>
+                    <span className="text-slate-400">
+                      {currentApp.interactiveElements.length} Live Component{currentApp.interactiveElements.length === 1 ? '' : 's'}
+                    </span>
+                  </div>
+                  <span className="font-mono text-[11px] text-slate-500 truncate max-w-md">
+                    {currentApp.workspacePath || ''}
+                  </span>
+                </div>
+
+                {/* Render Each Real Workspace Component */}
+                {currentApp.interactiveElements.map((elem) => {
+                  const isElemSelected = selectedElement?.id === elem.id;
+                  const displayCode =
+                    isElemSelected && redesignedCode
+                      ? redesignedCode
+                      : isElemSelected && matchedFileContent
+                      ? matchedFileContent
+                      : elem.codeSnippet || '';
+
+                  return (
+                    <div
+                      key={elem.id}
+                      style={{
+                        left: elem.bounds.x,
+                        top: elem.bounds.y,
+                        width: elem.bounds.width,
+                        height: elem.bounds.height,
+                      }}
+                      className="absolute rounded-xl overflow-hidden shadow-xl border border-slate-800/90 bg-slate-900/60 backdrop-blur-sm transition-all flex flex-col"
+                    >
+                      <div className="h-6 px-3 bg-slate-900/90 border-b border-slate-800/60 flex items-center justify-between text-[10px] text-slate-400 font-mono">
+                        <span className="text-indigo-300 font-semibold truncate">&lt;{elem.name}&gt;</span>
+                        <span className="text-slate-500 truncate max-w-[140px]">
+                          {elem.relativePath || elem.bounds.width + '×' + elem.bounds.height + 'px'}
+                        </span>
+                      </div>
+                      <div
+                        className="flex-1 overflow-auto p-3 flex flex-col justify-start items-stretch"
+                        dangerouslySetInnerHTML={{
+                          __html: extractRenderableHtml(displayCode, elem.name),
+                        }}
+                      />
+                    </div>
+                  );
+                })}
+
+                {currentApp.interactiveElements.length === 0 && (
+                  <div className="flex flex-col items-center justify-center h-64 text-center text-slate-400">
+                    <p className="text-sm font-medium text-slate-300">No UI components found in workspace directory</p>
+                    <p className="text-xs text-slate-500 mt-1">
+                      Directory has no .tsx, .jsx, or .html components to inspect.
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Simulated Web Background Content */}
-            {!currentApp.screenshotUrl && !currentApp.iframeUrl && currentApp.platform === 'web' && (
+            {!currentApp.screenshotUrl && !currentApp.iframeUrl && !currentApp.isWorkspace && currentApp.platform === 'web' && (
               <div className="w-full h-full bg-slate-900 text-white font-sans relative overflow-hidden">
                 {/* Simulated Header (bounds: x: 40, y: 20, width: 1120, height: 64) */}
                 <div
@@ -826,6 +954,16 @@ export const VisualCanvas: React.FC<VisualCanvasProps> = ({
                         : 'border border-transparent hover:border-slate-400/40'
                     }`}
                   >
+                    {/* In-Canvas Live AI Redesign Overlay (for demo mockups) */}
+                    {isSelected && !currentApp.isWorkspace && redesignedCode && showInCanvasPreview && (
+                      <div
+                        className="absolute inset-0 z-10 bg-slate-950/95 rounded-xl overflow-hidden p-2 flex items-center justify-center shadow-2xl pointer-events-none select-none border border-cyan-500/30"
+                        dangerouslySetInnerHTML={{
+                          __html: extractRenderableHtml(redesignedCode, elem.name),
+                        }}
+                      />
+                    )}
+
                     {/* Floating Tag Label - dynamically repositioned if near edges to prevent clipping or overflowing */}
                     {(isSelected || isHovered) && (
                       <div

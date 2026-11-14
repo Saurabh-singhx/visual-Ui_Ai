@@ -1,4 +1,4 @@
-export type PlatformType = 'web' | 'mobile' | 'desktop';
+export type PlatformType = 'web' | 'mobile' | 'desktop' | 'workspace';
 
 export interface BoundingBox {
   x: number;
@@ -24,6 +24,8 @@ export interface InteractiveElement {
   className?: string;
   codeSnippet?: string;
   styles?: ElementStyles;
+  filePath?: string;
+  relativePath?: string;
 }
 
 export interface SampleApp {
@@ -35,6 +37,8 @@ export interface SampleApp {
   interactiveElements: InteractiveElement[];
   screenshotUrl?: string;
   iframeUrl?: string;
+  isWorkspace?: boolean;
+  workspacePath?: string;
 }
 
 export interface AIChatMessage {

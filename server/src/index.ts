@@ -1,15 +1,15 @@
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import path from 'path';
+import fs from 'fs';
 import workspaceRoutes from './routes/workspaceRoutes';
-import adbRoutes from './routes/adbRoutes';
 import aiRoutes from './routes/aiRoutes';
-import captureRoutes from './routes/captureRoutes';
 
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 3838;
 
 // Middleware
 app.use(cors({ origin: '*' }));
@@ -28,23 +28,61 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
+// Resolve client/dist path reliably across dev and built environments
+function getClientDistPath(): string {
+  const candidates = [
+    path.resolve(process.cwd(), 'client/dist'),
+    path.resolve(process.cwd(), '../client/dist'),
+    path.resolve(__dirname, '../../client/dist'),
+    path.resolve(__dirname, '../client/dist'),
+  ];
+  for (const cand of candidates) {
+    if (fs.existsSync(cand)) {
+      return cand;
+    }
+  }
+  return candidates[0];
+}
+
+const clientDistPath = getClientDistPath();
+
+// Serve pre-built static client assets
+if (fs.existsSync(clientDistPath)) {
+  app.use(express.static(clientDistPath));
+} else {
+  console.warn(`[WARN] client/dist not found at ${clientDistPath}. Run 'npm run build' in client.`);
+}
+
 // Health check
 app.get('/api/health', (req: Request, res: Response) => {
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
     service: 'visual-uiai-server',
+    port: Number(PORT),
     version: '1.0.0',
   });
 });
 
-// Mount Routes
+// Mount Routes: Workspace (plus project and component aliases) and AI
+app.use('/api', workspaceRoutes);
 app.use('/api/workspace', workspaceRoutes);
-app.use('/api/adb', adbRoutes);
+app.use('/api/project', workspaceRoutes);
+app.use('/api/component', workspaceRoutes);
 app.use('/api/ai', aiRoutes);
-app.use('/api/capture', captureRoutes);
 
-// 404 Handler
+// SPA Fallback: Route any non-API GET request to client/dist/index.html (Express 5 safe)
+app.use((req: Request, res: Response, next: NextFunction) => {
+  if (req.method === 'GET' && !req.path.startsWith('/api')) {
+    const indexPath = path.join(clientDistPath, 'index.html');
+    if (fs.existsSync(indexPath)) {
+      return res.sendFile(indexPath);
+    }
+  }
+  next();
+});
+
+// 404 Handler for unhandled API and non-GET requests
 app.use((req: Request, res: Response) => {
   res.status(404).json({
     success: false,

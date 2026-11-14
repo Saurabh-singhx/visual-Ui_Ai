@@ -70,6 +70,12 @@ export const api = {
   },
 
   // Workspace
+  async getWorkspaceInfo(): Promise<{ success: boolean; platform: string; sampleWorkspacePath: string }> {
+    const res = await fetch(`${BASE_URL}/workspace/info`);
+    if (!res.ok) throw new Error('Could not fetch workspace info');
+    return res.json();
+  },
+
   async scanWorkspace(dirPath: string): Promise<WorkspaceFile[]> {
     const res = await fetch(`${BASE_URL}/workspace/scan`, {
       method: 'POST',
@@ -82,6 +88,20 @@ export const api = {
     }
     const data = await res.json();
     return data.files || [];
+  },
+
+  async getWorkspaceApp(dirPath: string): Promise<SampleApp> {
+    const res = await fetch(`${BASE_URL}/workspace/app`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dirPath }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Failed to load workspace application' }));
+      throw new Error(err.error || `HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    return data.app;
   },
 
   async searchWorkspace(dirPath: string, query: { text?: string; className?: string; tagName?: string }): Promise<WorkspaceSearchResult[]> {

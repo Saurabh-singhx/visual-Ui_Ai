@@ -28,7 +28,7 @@ interface LivePreviewProps {
 /**
  * Extracts renderable markup from React JSX component code
  */
-export function extractRenderableHtml(code: string): string {
+export function extractRenderableHtml(code: string, componentName?: string): string {
   if (!code) return '<div class="p-4 text-slate-400">No code generated yet.</div>';
 
   // If code is pure HTML
@@ -36,53 +36,75 @@ export function extractRenderableHtml(code: string): string {
     return code;
   }
 
-  // Parse default prop values if present: e.g. title = "...", badge = '...'
-  const defaultProps: Record<string, string> = {
-    title: 'Intelligent AI Redesign',
-    description: 'Automatically elevate your UI with high-contrast typography, balanced spacing, and interactive feedback.',
-    badge: 'Pro Feature',
-    label: 'Deposit Funds',
-    amount: '$48,295.40',
-    change: '+$1,420.50 (3.2%) today',
-    value: '42.8%',
-    subtitle: '16 Cores Online • 3.4 GHz',
-  };
-
-  const propMatches = code.matchAll(/([a-zA-Z0-9_]+)\s*=\s*["']([^"']+)["']/g);
-  for (const m of propMatches) {
-    defaultProps[m[1]] = m[2];
-  }
-
-  // Extract content inside return (...) or => (...) or return <tag>...</tag>
-  let jsxSnippet = code;
-  const returnParen = code.match(/return\s*\(\s*([\s\S]*?)\s*\);?/);
-  const arrowParen = code.match(/=>\s*\(\s*([\s\S]*?)\s*\);?/);
-  const returnDirect = code.match(/return\s+(<[a-zA-Z][\s\S]*?>[\s\S]*<\/[a-zA-Z0-9]+>);?/);
-  const arrowDirect = code.match(/=>\s*(<[a-zA-Z][\s\S]*?>[\s\S]*<\/[a-zA-Z0-9]+>);?/);
-
-  if (returnParen) {
-    jsxSnippet = returnParen[1];
-  } else if (arrowParen) {
-    jsxSnippet = arrowParen[1];
-  } else if (returnDirect) {
-    jsxSnippet = returnDirect[1];
-  } else if (arrowDirect) {
-    jsxSnippet = arrowDirect[1];
-  } else {
-    // Look for outermost JSX element if present
-    const firstTag = code.match(/<([a-zA-Z][a-zA-Z0-9]*)\b[\s\S]*<\/\1>/);
-    if (firstTag) {
-      jsxSnippet = firstTag[0];
+  // Derive component name fallback
+  let derivedName = componentName || '';
+  if (!derivedName) {
+    const compNameMatch = code.match(/(?:export\s+(?:default\s+)?(?:const|function|class)\s+|function\s+)([A-Z][A-Za-z0-9_]*)/);
+    if (compNameMatch && compNameMatch[1]) {
+      derivedName = compNameMatch[1];
     }
   }
 
-  // Clean JSX syntax for HTML browser rendering
+  // Extract explicit default prop values from function signature parameters
+  const propDefaults: Record<string, string> = {};
+
+  const paramMatch =
+    code.match(/(?:const|function)\s+[A-Za-z0-9_]+\s*(?::\s*[^=]+)?\s*=\s*\(\s*\{([\s\S]*?)\}\s*\)/) ||
+    code.match(/function\s+[A-Za-z0-9_]+\s*\(\s*\{([\s\S]*?)\}\s*\)/) ||
+    code.match(/\(\s*\{([\s\S]*?)\}\s*:\s*[A-Za-z0-9_]+\s*\)\s*=>/);
+
+  if (paramMatch) {
+    const paramsBlock = paramMatch[1];
+    // String default values: title = 'My Title'
+    for (const m of paramsBlock.matchAll(/([a-zA-Z0-9_]+)\s*=\s*["']([^"']+)["']/g)) {
+      propDefaults[m[1]] = m[2];
+    }
+    // Number default values: count = 5
+    for (const m of paramsBlock.matchAll(/([a-zA-Z0-9_]+)\s*=\s*([0-9]+(?:\.[0-9]+)?)/g)) {
+      propDefaults[m[1]] = m[2];
+    }
+    // Boolean default values: active = true
+    for (const m of paramsBlock.matchAll(/([a-zA-Z0-9_]+)\s*=\s*(true|false)/g)) {
+      propDefaults[m[1]] = m[2];
+    }
+  }
+
+  // Extract content inside return (...) or => (...) using balanced parenthesis tracking
+  let jsxSnippet = '';
+  const returnStartMatch = code.match(/(?:return\s*\(|=>\s*\()\s*([\s\S]*)/);
+  if (returnStartMatch) {
+    let depth = 1;
+    const str = returnStartMatch[1];
+    let i = 0;
+    for (; i < str.length; i++) {
+      if (str[i] === '(') depth++;
+      else if (str[i] === ')') {
+        depth--;
+        if (depth === 0) break;
+      }
+    }
+    if (depth === 0) {
+      jsxSnippet = str.slice(0, i).trim();
+    }
+  }
+
+  // Fallback to direct return <tag> or outermost JSX tag
+  if (!jsxSnippet) {
+    const returnDirect = code.match(/return\s+(<[a-zA-Z][\s\S]*?>[\s\S]*<\/[a-zA-Z0-9]+>);?/);
+    const arrowDirect = code.match(/=>\s*(<[a-zA-Z][\s\S]*?>[\s\S]*<\/[a-zA-Z0-9]+>);?/);
+    const firstTag = code.match(/<([a-zA-Z][a-zA-Z0-9]*)\b[\s\S]*<\/\1>/);
+
+    if (returnDirect) jsxSnippet = returnDirect[1];
+    else if (arrowDirect) jsxSnippet = arrowDirect[1];
+    else if (firstTag) jsxSnippet = firstTag[0];
+    else jsxSnippet = code;
+  }
+
+  // Clean JSX syntax for browser rendering
   let html = jsxSnippet
     .replace(/className=/g, 'class=')
     .replace(/\{\/\*[\s\S]*?\*\/\}/g, '') // remove JSX comments
-    .replace(/\{`([\s\S]*?)`\}/g, '$1') // template literals
-    .replace(/onClick=\{[^}]*\}/g, '') // strip react onClick handlers
-    .replace(/onAction=\{[^}]*\}/g, '')
+    .replace(/onClick=\{[^}]*\}/g, '') // strip react event handlers
     .replace(/on[A-Z][a-zA-Z]*=\{[^}]*\}/g, '')
     .replace(/aria-hidden="true"/g, 'aria-hidden="true"')
     .replace(/=\{true\}/g, '="true"')
@@ -90,20 +112,76 @@ export function extractRenderableHtml(code: string): string {
     .replace(/<>([\s\S]*?)<\/>/g, '$1')
     .trim();
 
-  // Replace prop interpolations like {title}, {title || 'Default'} with values
-  for (const [key, val] of Object.entries(defaultProps)) {
-    const propRegex = new RegExp(`\\{${key}(?:\\s*\\|\\|\\s*["'][^"']*["'])?\\}`, 'g');
+  // Clean template literals in class attributes: class={`px-4 py-2 ${active ? 'bg-blue' : ''}`}
+  html = html.replace(/class=\{`([\s\S]*?)`\}/g, (_, inner) => {
+    const cleaned = inner
+      .replace(/\$\{[^}]*?\}/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return `class="${cleaned}"`;
+  });
+
+  // Evaluate simple conditional rendering: {isOpen && (<div ...>)} or {showIcon && <span ...>}
+  html = html.replace(/\{[a-zA-Z0-9_.!?\s=><'"]+&&\s*\(([\s\S]*?)\)\}/g, '$1');
+  html = html.replace(/\{[a-zA-Z0-9_.!?\s=><'"]+&&\s*(<[a-zA-Z][\s\S]*?>[\s\S]*?<\/[a-zA-Z0-9]+>)\}/g, '$1');
+
+  // Evaluate simple ternary expressions: take the truthy branch for preview
+  html = html.replace(/\{[a-zA-Z0-9_.!?\s=><'"]+\?\s*\(([\s\S]*?)\)\s*:\s*\([\s\S]*?\)\}/g, '$1');
+  html = html.replace(/\{[a-zA-Z0-9_.!?\s=><'"]+\?\s*(<[a-zA-Z][\s\S]*?>[\s\S]*?<\/[a-zA-Z0-9]+>)\s*:\s*[\s\S]*?\}/g, '$1');
+
+  // Evaluate simple map expressions: {items.map(...) => (<li>...</li>)} -> render sample
+  html = html.replace(/\{[a-zA-Z0-9_.]+\.map\([^)]*\)\s*=>\s*\(([\s\S]*?)\)\}/g, '$1');
+
+  // Replace component's explicit default prop interpolations
+  for (const [key, val] of Object.entries(propDefaults)) {
+    const propRegex = new RegExp(`\\{(?:props\\.)?${key}(?:\\s*\\|\\|\\s*["'][^"']*["'])?\\}`, 'g');
     html = html.replace(propRegex, val);
   }
 
-  // Replace lucide icon tags with stylized modern icon placeholders
+  // Provide neutral contextual fallbacks based on prop name (no hardcoded SaaS marketing text)
+  const neutralSemanticPlaceholders: Record<string, string> = {
+    title: derivedName || 'Component Title',
+    heading: derivedName || 'Heading',
+    header: derivedName || 'Header',
+    name: 'Item Name',
+    username: 'Alex',
+    user: 'Alex',
+    label: 'Action',
+    description: 'Component details and overview information.',
+    subtitle: 'Overview Details',
+    badge: 'Active',
+    tag: 'Tag',
+    status: 'Ready',
+    count: '3',
+    quantity: '1',
+    amount: '100',
+    price: '$49.00',
+    date: 'Nov 2026',
+    time: '12:00 PM',
+    children: 'Content',
+    text: 'Information',
+    message: 'System message',
+    role: 'Member',
+  };
+
+  for (const [key, val] of Object.entries(neutralSemanticPlaceholders)) {
+    const propRegex = new RegExp(`\\{(?:props\\.)?${key}(?:\\s*\\|\\|\\s*["'][^"']*["'])?\\}`, 'g');
+    html = html.replace(propRegex, val);
+  }
+
+  // Replace any remaining simple prop expressions like {props.item} or {category} with capitalized title
+  html = html.replace(/\{(?:props\.)?([a-zA-Z0-9_]+)\}/g, (_, prop) => {
+    return prop.charAt(0).toUpperCase() + prop.slice(1);
+  });
+
+  // Replace lucide/react icon tags with clean inline visual glyphs
   html = html
     .replace(/<Sparkles[^>]*\/>/g, '<span class="inline-block text-cyan-400">✨</span>')
     .replace(/<CheckCircle2[^>]*\/>/g, '<span class="inline-block text-emerald-400">✓</span>')
     .replace(/<Check[^>]*\/>/g, '<span class="inline-block text-emerald-400">✓</span>')
-    .replace(/<ArrowUpRight[^>]*\/>/g, '<span class="inline-block text-indigo-400 font-bold">↗</span>')
-    .replace(/<ArrowRight[^>]*\/>/g, '<span class="inline-block text-indigo-400 font-bold">→</span>')
-    .replace(/<ChevronRight[^>]*\/>/g, '<span class="inline-block text-indigo-300 font-bold">›</span>')
+    .replace(/<ArrowUpRight[^>]*\/>/g, '<span class="inline-block font-bold">↗</span>')
+    .replace(/<ArrowRight[^>]*\/>/g, '<span class="inline-block font-bold">→</span>')
+    .replace(/<ChevronRight[^>]*\/>/g, '<span class="inline-block font-bold">›</span>')
     .replace(/<Layers[^>]*\/>/g, '<span class="inline-block text-purple-400">▤</span>')
     .replace(/<Shield[^>]*\/>/g, '<span class="inline-block text-emerald-400">🛡</span>')
     .replace(/<Activity[^>]*\/>/g, '<span class="inline-block text-emerald-400">⚡</span>')

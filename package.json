@@ -2,11 +2,17 @@
   "name": "visual-uiai",
   "version": "1.0.0",
   "description": "Visual UI-AI Studio: Multi-platform visual component inspector, AI redesign workbench, and workspace code patcher.",
+  "bin": {
+    "visual-ui": "./bin/visual-ui.js"
+  },
   "scripts": {
     "dev:server": "cd server && npm run dev",
     "dev:client": "cd client && npm run dev",
+    "visual-ui": "node ./bin/visual-ui.js",
+    "cli": "node ./bin/visual-ui.js",
     "test:server": "cd server && npm run test",
     "test:client": "cd client && npm run test",
+    "test:e2e": "./test/e2e/run-all.sh",
     "test": "npm run test:server && npm run test:client",
     "build": "cd client && npm run build && cd ../server && npm run build"
   },

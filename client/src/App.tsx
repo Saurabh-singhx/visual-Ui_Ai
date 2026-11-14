@@ -5,9 +5,6 @@ import { ElementInspector } from './components/inspector/ElementInspector';
 import { LivePreview } from './components/preview/LivePreview';
 import { AIChatPanel } from './components/chat/AIChatPanel';
 import { PatchReviewModal } from './components/workspace/PatchReviewModal';
-import { AdbModal } from './components/modals/AdbModal';
-import { WebUrlModal } from './components/modals/WebUrlModal';
-import { WorkspaceModal } from './components/modals/WorkspaceModal';
 import { api } from './services/api';
 import {
   PlatformType,
@@ -32,8 +29,9 @@ export const App: React.FC = () => {
   const [redesignedCode, setRedesignedCode] = useState<string>('');
 
   // Workspace & Patching
-  const [workspacePath, setWorkspacePath] = useState<string>('/home/saurabh/coding/visual_uiai/sample-workspace');
-  const [matchedFilePath, setMatchedFilePath] = useState<string>('/home/saurabh/coding/visual_uiai/sample-workspace/src/components/Card.tsx');
+  const [workspacePath, setWorkspacePath] = useState<string>('');
+  const [workspaceApp, setWorkspaceApp] = useState<SampleApp | null>(null);
+  const [matchedFilePath, setMatchedFilePath] = useState<string>('');
   const [matchedFileContent, setMatchedFileContent] = useState<string>('');
 
   // Modals
@@ -49,69 +47,113 @@ export const App: React.FC = () => {
 
   // Update current app when platform changes
   useEffect(() => {
+    if (platform === 'workspace') {
+      if (workspaceApp) {
+        setCurrentApp(workspaceApp);
+        if (workspaceApp.interactiveElements.length > 0) {
+          const first = workspaceApp.interactiveElements[0];
+          setSelectedElement(first);
+          if (first.filePath) {
+            setMatchedFilePath(first.filePath);
+            setMatchedFileContent(first.codeSnippet || '');
+          }
+        }
+      } else if (workspacePath) {
+        loadWorkspaceDirectory(workspacePath);
+      } else {
+        setIsWorkspaceModalOpen(true);
+      }
+      return;
+    }
+
     if (apps.length > 0) {
       const match = apps.find((a) => a.platform === platform) || apps[0];
       setCurrentApp(match);
       if (match.interactiveElements.length > 0) {
         setSelectedElement(match.interactiveElements[0]);
-        syncWorkspaceFileForElement(match.interactiveElements[0]);
       } else {
         setSelectedElement(null);
-        setMatchedFilePath('');
-        setMatchedFileContent('');
       }
+      setMatchedFilePath('');
+      setMatchedFileContent('');
     }
   }, [platform]);
 
+  const loadWorkspaceDirectory = async (targetPath: string) => {
+    const cleanWs = targetPath ? targetPath.trim().replace(/^["']|["']$/g, '').replace(/[/\\]+$/, '') : '';
+    if (!cleanWs) return;
+
+    setWorkspacePath(cleanWs);
+
+    try {
+      if (typeof api.getWorkspaceApp === 'function') {
+        const wsApp = await api.getWorkspaceApp(cleanWs);
+        if (wsApp) {
+          setWorkspaceApp(wsApp);
+          setCurrentApp(wsApp);
+          setPlatform('workspace');
+          if (wsApp.interactiveElements.length > 0) {
+            const first = wsApp.interactiveElements[0];
+            setSelectedElement(first);
+            if (first.filePath) {
+              setMatchedFilePath(first.filePath);
+              setMatchedFileContent(first.codeSnippet || '');
+            }
+          } else {
+            setSelectedElement(null);
+            setMatchedFilePath('');
+            setMatchedFileContent('');
+          }
+        }
+      }
+    } catch (err: any) {
+      console.warn('Could not construct dynamic workspace application:', err?.message);
+    }
+  };
+
   const syncWorkspaceFileForElement = async (elem: InteractiveElement, targetWs = workspacePath) => {
     try {
-      const lowerName = elem.name.toLowerCase();
-      const isNavbar =
-        lowerName.includes('nav') ||
-        elem.tagName.toLowerCase().includes('nav') ||
-        (elem.codeSnippet && elem.codeSnippet.toLowerCase().includes('navbar'));
-      const isCard =
-        lowerName.includes('card') ||
-        (elem.codeSnippet && elem.codeSnippet.toLowerCase().includes('card'));
-      const isMetric =
-        lowerName.includes('metric') ||
-        lowerName.includes('telemetry') ||
-        lowerName.includes('cpu usage') ||
-        elem.tagName.toLowerCase().includes('qwidget') ||
-        (elem.codeSnippet && (elem.codeSnippet.toLowerCase().includes('metric') || elem.codeSnippet.toLowerCase().includes('cpu usage')));
-
-      let candidatePath = '';
-      if (isNavbar) {
-        candidatePath = `${targetWs}/src/components/Navbar.tsx`;
-      } else if (isCard) {
-        candidatePath = `${targetWs}/src/components/Card.tsx`;
-      } else if (isMetric) {
-        candidatePath = `${targetWs}/src/components/MetricWidget.tsx`;
+      // 1. Direct file link if element already carries a workspace file path
+      if (elem.filePath) {
+        try {
+          const content = await api.readFile(elem.filePath);
+          setMatchedFilePath(elem.filePath);
+          setMatchedFileContent(content);
+          setSelectedElement((prev) => (prev ? { ...prev, codeSnippet: content } : prev));
+          return;
+        } catch {
+          // Fall through to dynamic workspace search below
+        }
       }
 
-      if (candidatePath) {
-        const content = await api.readFile(candidatePath);
-        setMatchedFilePath(candidatePath);
-        setMatchedFileContent(content);
+      // 2. Only perform workspace code grounding when inspecting workspace mode
+      if (platform !== 'workspace' && (!currentApp || !currentApp.isWorkspace)) {
+        setMatchedFilePath('');
+        setMatchedFileContent('');
         return;
       }
 
-      // Try searching workspace
-      const searchResults = await api.searchWorkspace(targetWs, {
-        text: elem.name,
-        className: elem.className,
-        tagName: elem.tagName,
-      });
+      const cleanWs = targetWs ? targetWs.trim().replace(/^["']|["']$/g, '').replace(/[/\\]+$/, '') : '';
 
-      if (searchResults && searchResults.length > 0) {
-        const topMatch = searchResults[0];
-        const content = await api.readFile(topMatch.filePath);
-        setMatchedFilePath(topMatch.filePath);
-        setMatchedFileContent(content);
-      } else {
-        setMatchedFilePath('');
-        setMatchedFileContent('');
+      if (cleanWs) {
+        const searchResults = await api.searchWorkspace(cleanWs, {
+          text: elem.name,
+          className: elem.className,
+          tagName: elem.tagName,
+        });
+
+        if (searchResults && searchResults.length > 0) {
+          const topMatch = searchResults[0];
+          const content = await api.readFile(topMatch.filePath);
+          setMatchedFilePath(topMatch.filePath);
+          setMatchedFileContent(content);
+          setSelectedElement((prev) => (prev ? { ...prev, codeSnippet: content } : prev));
+          return;
+        }
       }
+
+      setMatchedFilePath('');
+      setMatchedFileContent('');
     } catch {
       setMatchedFilePath('');
       setMatchedFileContent('');
@@ -120,11 +162,18 @@ export const App: React.FC = () => {
 
   const loadInitialData = async () => {
     try {
-      const [sampleList, providerInfo, presetList] = await Promise.all([
+      const [sampleList, providerInfo, presetList, wsInfo] = await Promise.all([
         api.getSamples(),
         api.getAiProviders(),
         api.getAiPresets(),
+        api.getWorkspaceInfo().catch(() => null),
       ]);
+
+      let initialWs = '';
+      if (wsInfo?.sampleWorkspacePath) {
+        initialWs = wsInfo.sampleWorkspacePath;
+        setWorkspacePath(initialWs);
+      }
 
       setApps(sampleList);
       if (sampleList.length > 0) {
@@ -132,7 +181,6 @@ export const App: React.FC = () => {
         setCurrentApp(initial);
         if (initial.interactiveElements.length > 0) {
           setSelectedElement(initial.interactiveElements[0]);
-          syncWorkspaceFileForElement(initial.interactiveElements[0]);
         }
       }
 
@@ -163,6 +211,9 @@ You can:
   };
 
   const handleSelectElement = (elem: InteractiveElement) => {
+    if (selectedElement?.id !== elem.id) {
+      setRedesignedCode(''); // Reset redesign preview when switching elements
+    }
     setSelectedElement(elem);
     setIsSnipMode(false);
     if (currentApp && !currentApp.interactiveElements.some((e) => e.id === elem.id)) {
@@ -178,6 +229,7 @@ You can:
 
   const handleSnipComplete = (box: BoundingBox) => {
     setIsSnipMode(false);
+    setRedesignedCode('');
     const customElement: InteractiveElement = {
       id: `custom-snip-${Date.now()}`,
       name: `Custom Snip (${Math.round(box.width)}×${Math.round(box.height)})`,
@@ -218,9 +270,12 @@ You can:
     setIsLoadingAI(true);
 
     try {
+      // Pass the current redesigned code if available so iterative prompts build upon previous changes
+      const baseCode = redesignedCode || matchedFileContent || selectedElement?.codeSnippet || '';
+
       const response = await api.redesignComponent({
         prompt: userPrompt,
-        originalCode: selectedElement?.codeSnippet || matchedFileContent,
+        originalCode: baseCode,
         extractedStyles: selectedElement?.styles,
         wcagFixRequested: userPrompt.toLowerCase().includes('wcag') || userPrompt.toLowerCase().includes('contrast'),
       });
@@ -391,6 +446,7 @@ You can:
               isSnipMode={isSnipMode}
               onSnipComplete={handleSnipComplete}
               redesignedCode={redesignedCode}
+              matchedFileContent={matchedFileContent}
             />
           </div>
 
@@ -400,6 +456,8 @@ You can:
               element={selectedElement}
               onFixAccessibility={handleFixAccessibility}
               onSearchInWorkspace={() => setIsWorkspaceModalOpen(true)}
+              matchedFilePath={matchedFilePath}
+              matchedFileContent={matchedFileContent}
             />
           </div>
         </div>
@@ -450,43 +508,6 @@ You can:
         newCode={redesignedCode}
         onApply={handleApplyPatch}
         onRollback={handleRollback}
-      />
-
-      <AdbModal
-        isOpen={isAdbModalOpen}
-        onClose={() => setIsAdbModalOpen(false)}
-        onSelectSampleMode={() => setPlatform('mobile')}
-        onCaptureDevice={(capturedApp) => {
-          setApps((prev) => [capturedApp, ...prev.filter((a) => a.id !== capturedApp.id && a.platform !== 'mobile')]);
-          setCurrentApp(capturedApp);
-          setPlatform('mobile');
-          if (capturedApp.interactiveElements.length > 0) {
-            setSelectedElement(capturedApp.interactiveElements[0]);
-            syncWorkspaceFileForElement(capturedApp.interactiveElements[0]);
-          } else {
-            setSelectedElement(null);
-            setMatchedFilePath('');
-            setMatchedFileContent('');
-          }
-        }}
-      />
-
-      <WebUrlModal
-        isOpen={isWebModalOpen}
-        onClose={() => setIsWebModalOpen(false)}
-        onLoadUrl={handleLoadWebUrl}
-      />
-
-      <WorkspaceModal
-        isOpen={isWorkspaceModalOpen}
-        onClose={() => setIsWorkspaceModalOpen(false)}
-        currentPath={workspacePath}
-        onPathChange={(p) => setWorkspacePath(p)}
-        selectedElement={selectedElement}
-        onSelectMatchedFile={(filePath, content) => {
-          setMatchedFilePath(filePath);
-          setMatchedFileContent(content);
-        }}
       />
     </div>
   );

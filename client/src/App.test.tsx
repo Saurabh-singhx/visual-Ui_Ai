@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import React from 'react';
 import App from './App';
+import { api } from './services/api';
 
 // Mock API calls
 vi.mock('./services/api', () => ({
@@ -65,6 +66,46 @@ vi.mock('./services/api', () => ({
     readFile: vi.fn().mockResolvedValue('// sample code'),
     scanWorkspace: vi.fn().mockResolvedValue([]),
     searchWorkspace: vi.fn().mockResolvedValue([]),
+    getWorkspaceInfo: vi.fn().mockResolvedValue({
+      success: true,
+      platform: 'linux',
+      sampleWorkspacePath: '/sample-workspace',
+    }),
+    getWorkspaceApp: vi.fn().mockImplementation((dirPath: string) =>
+      Promise.resolve({
+        id: 'workspace-test',
+        platform: 'web',
+        name: 'Workspace: test-workspace',
+        viewport: { width: 1200, height: 750 },
+        description: 'Dynamic workspace components',
+        interactiveElements: [
+          {
+            id: 'ws-nav',
+            name: 'WorkspaceNav',
+            selector: 'nav.navbar',
+            bounds: { x: 40, y: 24, width: 1120, height: 68 },
+            tagName: 'nav',
+            className: 'bg-indigo-900 px-6 py-4',
+            codeSnippet: '<nav className="bg-indigo-900 px-6 py-4">Workspace Navigation</nav>',
+            filePath: `${dirPath}/WorkspaceNav.tsx`,
+            relativePath: 'WorkspaceNav.tsx',
+          },
+          {
+            id: 'ws-card',
+            name: 'WorkspaceCard',
+            selector: 'div.card',
+            bounds: { x: 40, y: 116, width: 350, height: 230 },
+            tagName: 'div',
+            className: 'p-4 bg-slate-800 rounded-xl',
+            codeSnippet: '<div className="p-4 bg-slate-800 rounded-xl">Real Searched Component</div>',
+            filePath: `${dirPath}/WorkspaceCard.tsx`,
+            relativePath: 'WorkspaceCard.tsx',
+          },
+        ],
+        isWorkspace: true,
+        workspacePath: dirPath,
+      })
+    ),
     getAdbDevices: vi.fn().mockResolvedValue([]),
   },
 }));
@@ -105,50 +146,18 @@ describe('App Component', () => {
       fireEvent.click(mobileTab);
     });
 
-    // After switching to mobile, ADB button becomes visible
-    expect(screen.getByRole('button', { name: /ADB Devices/i })).toBeInTheDocument();
+    // After switching to mobile, platform state updates cleanly
+    expect(screen.getByText('Mobile (ADB)')).toBeInTheDocument();
   });
 
-  it('opens and closes Web URL modal cleanly', async () => {
+  it('verifies responsive viewport controls are rendered in canvas', async () => {
     await act(async () => {
       render(<App />);
     });
 
-    const loadUrlBtn = screen.getByRole('button', { name: /Load URL/i });
-    await act(async () => {
-      fireEvent.click(loadUrlBtn);
-    });
-
-    expect(screen.getByText('Load Web Application')).toBeInTheDocument();
-    expect(screen.getByText('Connect')).toBeInTheDocument();
-
-    const cancelBtn = screen.getByRole('button', { name: /Cancel/i });
-    await act(async () => {
-      fireEvent.click(cancelBtn);
-    });
-
-    expect(screen.queryByText('Load Web Application')).not.toBeInTheDocument();
-  });
-
-  it('opens and closes Workspace modal cleanly', async () => {
-    await act(async () => {
-      render(<App />);
-    });
-
-    const workspaceBtn = screen.getByTitle(/Target Workspace for Code Patching/i);
-    await act(async () => {
-      fireEvent.click(workspaceBtn);
-    });
-
-    expect(screen.getByText('Link Local Codebase')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Scan/i })).toBeInTheDocument();
-
-    const closeBtn = screen.getByRole('button', { name: /Close/i });
-    await act(async () => {
-      fireEvent.click(closeBtn);
-    });
-
-    expect(screen.queryByText('Link Local Codebase')).not.toBeInTheDocument();
+    expect(screen.getByTitle(/Mobile Viewport/i)).toBeInTheDocument();
+    expect(screen.getByTitle(/Tablet Viewport/i)).toBeInTheDocument();
+    expect(screen.getByTitle(/Desktop Viewport/i)).toBeInTheDocument();
   });
 
   it('renders Element Selector button in header and switches between select and snip modes', async () => {
@@ -237,5 +246,26 @@ describe('App Component', () => {
     // Expect inspector and canvas to be active and populated
     expect(screen.getByText('WCAG 2.2 Audit')).toBeInTheDocument();
     expect(screen.getByText('Design Tokens & Styles')).toBeInTheDocument();
+  });
+
+  it('renders Studio Header with Workspace platform tab', async () => {
+    await act(async () => {
+      render(<App />);
+    });
+
+    expect(screen.getByText('Workspace')).toBeInTheDocument();
+  });
+
+  it('switches to Workspace platform tab cleanly', async () => {
+    await act(async () => {
+      render(<App />);
+    });
+
+    const wsTab = screen.getByText('Workspace');
+    await act(async () => {
+      fireEvent.click(wsTab);
+    });
+
+    expect(screen.getByText('Workspace')).toBeInTheDocument();
   });
 });

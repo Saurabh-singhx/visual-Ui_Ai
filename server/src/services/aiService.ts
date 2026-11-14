@@ -1,5 +1,113 @@
 import { RedesignRequest, RedesignResponse } from '../types';
 
+export interface AiModificationResult {
+  modifiedCode: string;
+  appliedChanges: string[];
+}
+
+export interface AnimationUtilityDefinition {
+  id: string;
+  keywords: string[];
+  classes: string[];
+  conflictPatterns: RegExp[];
+  description: string;
+}
+
+export const ANIMATION_PRESETS: AnimationUtilityDefinition[] = [
+  {
+    id: 'hover-scale',
+    keywords: ['hover scale', 'zoom on hover', 'scale on hover', 'scale up', 'hover zoom', 'zoom', 'scale', 'scale-up', 'smoothly scale up'],
+    classes: ['transition-all', 'duration-300', 'ease-in-out', 'hover:scale-105', 'active:scale-95', 'cursor-pointer'],
+    conflictPatterns: [
+      /transition(?:-\w+)?/,
+      /duration-\d+/,
+      /ease-\w+/,
+      /hover:scale-\d+/,
+      /active:scale-\d+/,
+      /scale-\d+/,
+      /cursor-(?:pointer|default|not-allowed)/,
+    ],
+    description: 'Added smooth hover scale transition (105%) with active press feedback',
+  },
+  {
+    id: 'hover-lift',
+    keywords: ['hover lift', 'float on hover', 'lift on hover', 'elevate on hover', 'hover float', 'float', 'hover elevation', 'smooth hover elevation'],
+    classes: ['transition-all', 'duration-300', 'ease-in-out', 'hover:-translate-y-1', 'hover:shadow-xl'],
+    conflictPatterns: [
+      /transition(?:-\w+)?/,
+      /duration-\d+/,
+      /ease-\w+/,
+      /hover:-?translate-[xy]-\w+/,
+      /hover:shadow-(?:sm|md|lg|xl|2xl|none|\[[^\]]+\])/,
+    ],
+    description: 'Added hover micro-lift (-1px) and shadow elevation',
+  },
+  {
+    id: 'pulse',
+    keywords: ['pulse', 'pulsing', 'heartbeat', 'flashing', 'pulse animation'],
+    classes: ['animate-pulse'],
+    conflictPatterns: [/animate-(?:pulse|bounce|spin|ping|none)/],
+    description: 'Added pulse animation',
+  },
+  {
+    id: 'bounce',
+    keywords: ['bounce', 'bouncing', 'spring', 'bounce on hover'],
+    classes: ['animate-bounce'],
+    conflictPatterns: [/animate-(?:pulse|bounce|spin|ping|none)/],
+    description: 'Added bounce animation',
+  },
+  {
+    id: 'spin',
+    keywords: ['spin', 'spinning', 'rotate', 'rotating'],
+    classes: ['animate-spin'],
+    conflictPatterns: [/animate-(?:pulse|bounce|spin|ping|none)/],
+    description: 'Added continuous spin animation',
+  },
+  {
+    id: 'smooth-transition',
+    keywords: ['smooth transition', 'transition', 'smooth', 'ease'],
+    classes: ['transition-all', 'duration-300', 'ease-in-out'],
+    conflictPatterns: [/transition(?:-\w+)?/, /duration-\d+/, /ease-\w+/],
+    description: 'Added smooth ease-in-out transition',
+  },
+  {
+    id: 'glow',
+    keywords: ['glow', 'neon', 'glow on hover', 'neon glow', 'glow effect'],
+    classes: ['transition-all', 'duration-300', 'hover:shadow-[0_0_15px_rgba(99,102,241,0.5)]'],
+    conflictPatterns: [
+      /transition(?:-\w+)?/,
+      /duration-\d+/,
+      /ease-\w+/,
+      /hover:shadow-(?:sm|md|lg|xl|2xl|\[[^\]]+\])/,
+    ],
+    description: 'Added neon glow hover effect',
+  },
+];
+
+export function mergeCleanClasses(
+  existingClassStr: string,
+  newClasses: string[],
+  conflictPatterns: RegExp[] = []
+): string {
+  let tokens = existingClassStr.trim().split(/\s+/).filter(Boolean);
+
+  // Remove conflicting classes
+  for (const pattern of conflictPatterns) {
+    tokens = tokens.filter((cls) => !pattern.test(cls));
+  }
+
+  // Append new classes without duplicates
+  for (const group of newClasses) {
+    for (const token of group.trim().split(/\s+/)) {
+      if (token && !tokens.includes(token)) {
+        tokens.push(token);
+      }
+    }
+  }
+
+  return tokens.join(' ');
+}
+
 export class AiService {
   /**
    * Main entry point for component redesign and chat
@@ -40,17 +148,327 @@ export class AiService {
   }
 
   /**
+   * Public engine for in-session AI code modification returning both modified code and changelog
+   */
+  modifyComponentCode(code: string, prompt: string, elementId?: string): AiModificationResult {
+    let updated = code;
+    const lowerPrompt = prompt.toLowerCase();
+    const appliedChanges: string[] = [];
+
+    // 1. Color Customization
+    const colorMap: Record<string, { name: string; from: string; to: string; bg: string; hover: string; text: string; ring: string }> = {
+      red: { name: 'red', from: 'from-rose-600', to: 'to-red-600', bg: 'bg-rose-600', hover: 'hover:bg-rose-500', text: 'text-rose-400', ring: 'ring-rose-400' },
+      rose: { name: 'rose', from: 'from-rose-600', to: 'to-pink-600', bg: 'bg-rose-600', hover: 'hover:bg-rose-500', text: 'text-rose-400', ring: 'ring-rose-400' },
+      green: { name: 'green', from: 'from-emerald-600', to: 'to-green-600', bg: 'bg-emerald-600', hover: 'hover:bg-emerald-500', text: 'text-emerald-400', ring: 'ring-emerald-400' },
+      emerald: { name: 'emerald', from: 'from-emerald-600', to: 'to-teal-600', bg: 'bg-emerald-600', hover: 'hover:bg-emerald-500', text: 'text-emerald-400', ring: 'ring-emerald-400' },
+      purple: { name: 'purple', from: 'from-purple-600', to: 'to-indigo-600', bg: 'bg-purple-600', hover: 'hover:bg-purple-500', text: 'text-purple-400', ring: 'ring-purple-400' },
+      violet: { name: 'violet', from: 'from-violet-600', to: 'to-purple-600', bg: 'bg-violet-600', hover: 'hover:bg-violet-500', text: 'text-violet-400', ring: 'ring-violet-400' },
+      amber: { name: 'amber', from: 'from-amber-500', to: 'to-orange-500', bg: 'bg-amber-500', hover: 'hover:bg-amber-400', text: 'text-amber-400', ring: 'ring-amber-400' },
+      yellow: { name: 'yellow', from: 'from-amber-500', to: 'to-yellow-500', bg: 'bg-amber-500', hover: 'hover:bg-amber-400', text: 'text-amber-400', ring: 'ring-amber-400' },
+      orange: { name: 'orange', from: 'from-orange-600', to: 'to-amber-500', bg: 'bg-orange-600', hover: 'hover:bg-orange-500', text: 'text-orange-400', ring: 'ring-orange-400' },
+      cyan: { name: 'cyan', from: 'from-cyan-500', to: 'to-blue-600', bg: 'bg-cyan-500', hover: 'hover:bg-cyan-400', text: 'text-cyan-400', ring: 'ring-cyan-400' },
+      teal: { name: 'teal', from: 'from-teal-600', to: 'to-emerald-600', bg: 'bg-teal-600', hover: 'hover:bg-teal-500', text: 'text-teal-400', ring: 'ring-teal-400' },
+      blue: { name: 'blue', from: 'from-blue-600', to: 'to-indigo-600', bg: 'bg-blue-600', hover: 'hover:bg-blue-500', text: 'text-blue-400', ring: 'ring-blue-400' },
+      indigo: { name: 'indigo', from: 'from-indigo-600', to: 'to-purple-600', bg: 'bg-indigo-600', hover: 'hover:bg-indigo-500', text: 'text-indigo-400', ring: 'ring-indigo-400' },
+      dark: { name: 'dark', from: 'from-slate-900', to: 'to-black', bg: 'bg-slate-900', hover: 'hover:bg-slate-800', text: 'text-slate-300', ring: 'ring-slate-400' },
+      slate: { name: 'slate', from: 'from-slate-800', to: 'to-slate-900', bg: 'bg-slate-800', hover: 'hover:bg-slate-700', text: 'text-slate-300', ring: 'ring-slate-400' },
+    };
+
+    let targetTheme: (typeof colorMap)[string] | null = null;
+    for (const [name, theme] of Object.entries(colorMap)) {
+      if (new RegExp(`\\b${name}\\b`).test(lowerPrompt)) {
+        targetTheme = theme;
+        break;
+      }
+    }
+
+    if (targetTheme) {
+      // Replace gradients and backgrounds
+      const beforeColor = updated;
+      updated = updated.replace(/from-(?:indigo|blue|emerald|rose|purple|cyan|amber|slate)-(?:500|600|700)/g, targetTheme.from);
+      updated = updated.replace(/to-(?:indigo|blue|emerald|rose|purple|cyan|amber|slate|teal|pink)-(?:500|600|700)/g, targetTheme.to);
+      updated = updated.replace(/bg-(?:indigo|blue|emerald|rose|purple|cyan|amber)-(?:500|600|700)(?!\/)/g, targetTheme.bg);
+      updated = updated.replace(/hover:bg-(?:indigo|blue|emerald|rose|purple|cyan|amber)-(?:400|500|600|700)/g, targetTheme.hover);
+      updated = updated.replace(/text-(?:indigo|blue|emerald|rose|purple|cyan|amber)-(?:300|400)/g, targetTheme.text);
+      updated = updated.replace(/ring-(?:indigo|blue|emerald|rose|purple|cyan|amber)-(?:400|500)/g, targetTheme.ring);
+
+      // If no bg was replaced and component has className without bg, attach bg
+      if (beforeColor === updated) {
+        if (/className=["'][^"']*["']/.test(updated)) {
+          updated = updated.replace(/className=["']([^"']*)["']/, (match, cls) => {
+            if (!cls.includes('bg-')) {
+              return `className="${cls} ${targetTheme!.bg}"`;
+            }
+            return match;
+          });
+        } else if (/<[A-Za-z][A-Za-z0-9_-]*/.test(updated)) {
+          updated = updated.replace(/(<[A-Za-z][A-Za-z0-9_-]*\b[^>]*?)(\s*\/?>)/, `$1 className="${targetTheme!.bg}"$2`);
+        }
+      }
+      appliedChanges.push(`Changed color palette to ${targetTheme.name}`);
+    }
+
+    // 2. Custom Text / Label / Title Extraction
+    const quotedMatch =
+      prompt.match(/(?:title|label|text|heading|value|subtitle|name|button)\s*(?:to|is|=)?\s*["']([^"']+)["']/i) ||
+      prompt.match(/(?:called|named|saying|labeled)\s*["']([^"']+)["']/i);
+
+    if (quotedMatch) {
+      const newText = quotedMatch[1];
+      if (/label|button|cta|action/i.test(prompt)) {
+        updated = updated.replace(/label\s*=\s*["'][^"']+["']/, `label = "${newText}"`);
+        updated = updated.replace(/<span>(?:Deposit(?: Funds)?|Get Started|Learn more|Explore Component|Sign In)<\/span>/i, `<span>${newText}</span>`);
+        updated = updated.replace(/<button([^>]*)>(?:Deposit|Learn more|Sign In|Click Me)<\/button>/i, `<button$1>${newText}</button>`);
+        appliedChanges.push(`Updated button label to "${newText}"`);
+      } else if (/title|heading|name/i.test(prompt)) {
+        updated = updated.replace(/title\s*=\s*["'][^"']+["']/, `title = "${newText}"`);
+        updated = updated.replace(/<h[1-6]([^>]*)>[^<]+<\/h[1-6]>/i, `<h3$1>${newText}</h3>`);
+        appliedChanges.push(`Updated title to "${newText}"`);
+      } else if (/value|metric|number|percentage|percent/i.test(prompt)) {
+        updated = updated.replace(/value\s*=\s*["'][^"']+["']/, `value = "${newText}"`);
+        updated = updated.replace(/(<div[^>]*font-mono[^>]*>)[^<]+(<\/div>)/i, `$1${newText}$2`);
+        appliedChanges.push(`Updated metric value to "${newText}"`);
+      } else if (/subtitle|description/i.test(prompt)) {
+        updated = updated.replace(/subtitle\s*=\s*["'][^"']+["']/, `subtitle = "${newText}"`);
+        updated = updated.replace(/description\s*=\s*["'][^"']+["']/, `description = "${newText}"`);
+        updated = updated.replace(/(<p[^>]*text-[xs|sm][^>]*>)[^<]+(<\/p>)/i, `$1${newText}$2`);
+        appliedChanges.push(`Updated description to "${newText}"`);
+      }
+    }
+
+    // 3. Shape & Corner Radius
+    if (lowerPrompt.includes('rounded-full') || lowerPrompt.includes('pill')) {
+      if (/rounded-(?:lg|xl|2xl|3xl|md|sm|none)|rounded\b/.test(updated)) {
+        updated = updated.replace(/rounded-(?:lg|xl|2xl|3xl|md|sm|none)|rounded\b/g, 'rounded-full');
+      } else {
+        updated = updated.replace(/className=["']([^"']*)["']/, 'className="$1 rounded-full"');
+      }
+      appliedChanges.push('Updated corner radius to rounded-full');
+    } else if (lowerPrompt.includes('rounded-none') || lowerPrompt.includes('square') || lowerPrompt.includes('sharp')) {
+      updated = updated.replace(/rounded-(?:lg|xl|2xl|3xl|md|sm|full)|rounded\b/g, 'rounded-none');
+      appliedChanges.push('Updated corner radius to rounded-none');
+    } else if (lowerPrompt.includes('rounded-3xl')) {
+      updated = updated.replace(/rounded-(?:lg|xl|2xl|md|sm|full)|rounded\b/g, 'rounded-3xl');
+      appliedChanges.push('Updated corner radius to rounded-3xl');
+    }
+
+    // 4. Sizing: Compact vs Large
+    if (lowerPrompt.includes('compact') || lowerPrompt.includes('small')) {
+      updated = updated.replace(/p-6/g, 'p-4').replace(/p-5/g, 'p-3').replace(/py-2\.5/g, 'py-1.5').replace(/px-5/g, 'px-3.5');
+      appliedChanges.push('Optimized component layout for compact sizing');
+    } else if (lowerPrompt.includes('large') || lowerPrompt.includes('spacious')) {
+      updated = updated.replace(/p-4/g, 'p-6').replace(/p-5/g, 'p-7').replace(/py-2\.5/g, 'py-3.5').replace(/px-4/g, 'px-6');
+      appliedChanges.push('Expanded component layout for spacious presentation');
+    }
+
+    // 5. Border
+    if (lowerPrompt.includes('border-2') || lowerPrompt.includes('thick border')) {
+      updated = updated.replace(/border /g, 'border-2 ');
+      appliedChanges.push('Increased border stroke to border-2');
+    }
+
+    // 6. Animation Utilities & Transitions
+    const matchedPresets: AnimationUtilityDefinition[] = [];
+    for (const preset of ANIMATION_PRESETS) {
+      if (preset.keywords.some((kw) => lowerPrompt.includes(kw))) {
+        matchedPresets.push(preset);
+      }
+    }
+
+    if (matchedPresets.length > 0) {
+      // Determine target tag and target line number
+      let targetTag = 'button';
+      let targetLine: number | null = null;
+      if (elementId) {
+        const parts = elementId.split('-');
+        if (parts.length > 0 && parts[0]) {
+          targetTag = parts[0].toLowerCase();
+        }
+        if (parts.length > 1) {
+          const parsedLine = parseInt(parts[1], 10);
+          if (!isNaN(parsedLine) && parsedLine > 0) {
+            targetLine = parsedLine;
+          }
+        }
+      } else if (lowerPrompt.includes('badge') || lowerPrompt.includes('status')) {
+        targetTag = updated.includes('<span') ? 'span' : 'div';
+      } else if (lowerPrompt.includes('button') || lowerPrompt.includes('btn') || lowerPrompt.includes('cta')) {
+        targetTag = 'button';
+      } else if (lowerPrompt.includes('card') || lowerPrompt.includes('container')) {
+        targetTag = updated.includes('<article') ? 'article' : 'div';
+      } else if (!updated.includes('<button') && updated.includes('<article')) {
+        targetTag = 'article';
+      } else if (!updated.includes('<button') && updated.includes('<span')) {
+        targetTag = 'span';
+      }
+
+      // Collect all classes and conflict patterns to merge
+      const classesToAdd: string[] = [];
+      const conflictPatterns: RegExp[] = [];
+      for (const preset of matchedPresets) {
+        classesToAdd.push(...preset.classes);
+        conflictPatterns.push(...preset.conflictPatterns);
+        appliedChanges.push(preset.description);
+      }
+
+      // Helper function to update classes on a tag string ensuring exactly one className attribute
+      const updateTagClasses = (tagText: string): string => {
+        const classMatch = tagText.match(/\bclass(?:Name)?=["']([^"']*)["']/i);
+        if (classMatch) {
+          const existingClasses = classMatch[1];
+          const merged = mergeCleanClasses(existingClasses, classesToAdd, conflictPatterns);
+          return tagText.replace(/\bclass(?:Name)?=["'][^"']*["']/i, `className="${merged}"`);
+        }
+        if (/\s*\/>$/.test(tagText)) {
+          return tagText.replace(/\s*\/>$/, ` className="${classesToAdd.join(' ')}" />`);
+        }
+        return tagText.replace(/\s*>$/, ` className="${classesToAdd.join(' ')}">`);
+      };
+
+      // Find candidate tags matching targetTag
+      const openTagRegex = new RegExp(`(<${targetTag}\\b[^>]*?>)`, 'gi');
+      let match: RegExpExecArray | null;
+      let chosenMatch: { index: number; text: string } | null = null;
+      let minLineDiff = Infinity;
+
+      while ((match = openTagRegex.exec(updated)) !== null) {
+        const matchIndex = match.index;
+        const matchLine = updated.substring(0, matchIndex).split('\n').length;
+        if (targetLine !== null) {
+          const diff = Math.abs(matchLine - targetLine);
+          if (diff < minLineDiff) {
+            minLineDiff = diff;
+            chosenMatch = { index: matchIndex, text: match[0] };
+          }
+        } else {
+          chosenMatch = { index: matchIndex, text: match[0] };
+          break;
+        }
+      }
+
+      if (chosenMatch) {
+        const newTag = updateTagClasses(chosenMatch.text);
+        updated =
+          updated.substring(0, chosenMatch.index) +
+          newTag +
+          updated.substring(chosenMatch.index + chosenMatch.text.length);
+      } else {
+        // Fallback: search for any element with className
+        const classMatch = updated.match(/\bclass(?:Name)?=["']([^"']*)["']/i);
+        if (classMatch && classMatch.index !== undefined) {
+          const existingClasses = classMatch[1];
+          const merged = mergeCleanClasses(existingClasses, classesToAdd, conflictPatterns);
+          updated = updated.replace(/\bclass(?:Name)?=["'][^"']*["']/i, `className="${merged}"`);
+        }
+      }
+    }
+
+    // 7. Scoped Keyframe Injection
+    if (lowerPrompt.includes('keyframe') || lowerPrompt.includes('shimmer') || lowerPrompt.includes('wiggle')) {
+      if (!updated.includes('@keyframes')) {
+        const keyframesStyle = `\n      <style>{\`\n        @keyframes shimmer {\n          0% { background-position: -200% 0; }\n          100% { background-position: 200% 0; }\n        }\n        @keyframes wiggle {\n          0%, 100% { transform: rotate(-3deg); }\n          50% { transform: rotate(3deg); }\n        }\n      \`}</style>`;
+        if (/return\s*\(\s*<[A-Za-z][^>]*>/.test(updated)) {
+          updated = updated.replace(/(return\s*\(\s*<[A-Za-z][^>]*>)/, `$1${keyframesStyle}`);
+        } else if (/<[A-Za-z][^>]*>/.test(updated)) {
+          updated = updated.replace(/(<[A-Za-z][^>]*>)/, `$1${keyframesStyle}`);
+        }
+        appliedChanges.push('Injected scoped CSS keyframes for custom animations');
+      }
+    }
+
+    // 8. Framer Motion Integration
+    if (lowerPrompt.includes('framer-motion') || lowerPrompt.includes('framer motion')) {
+      if (!updated.includes('framer-motion')) {
+        updated = `import { motion } from 'framer-motion';\n` + updated;
+        appliedChanges.push('Imported motion component from framer-motion');
+      }
+      if (updated.includes('<button') && !updated.includes('<motion.button')) {
+        updated = updated.replace(/<button\b([^>]*)>/, '<motion.button$1 whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }} transition={{ type: "spring", stiffness: 400, damping: 17 }}>');
+        updated = updated.replace(/<\/button>/, '</motion.button>');
+        appliedChanges.push('Converted button to motion.button with spring physics');
+      }
+    }
+
+    return {
+      modifiedCode: updated,
+      appliedChanges,
+    };
+  }
+
+  /**
+   * Applies prompt-driven dynamic modifications to JSX code (backward compatibility)
+   */
+  private applyPromptModifications(code: string, prompt: string): string {
+    return this.modifyComponentCode(code, prompt).modifiedCode;
+  }
+
+  /**
    * Smart rule-based and template-informed AI UI generator for instant offline redesign
    */
   private generateSmartLocalRedesign(request: RedesignRequest): RedesignResponse {
     const { prompt, originalCode, wcagFixRequested } = request;
     const lowerPrompt = prompt.toLowerCase();
 
+    // Check if prompt is an iterative modification of an existing component or snippet
+    const hasAnimationTokens =
+      lowerPrompt.includes('hover') ||
+      lowerPrompt.includes('scale') ||
+      lowerPrompt.includes('lift') ||
+      lowerPrompt.includes('float') ||
+      lowerPrompt.includes('pulse') ||
+      lowerPrompt.includes('bounce') ||
+      lowerPrompt.includes('spin') ||
+      lowerPrompt.includes('glow') ||
+      lowerPrompt.includes('neon') ||
+      lowerPrompt.includes('transition') ||
+      lowerPrompt.includes('animate') ||
+      lowerPrompt.includes('motion') ||
+      lowerPrompt.includes('keyframe');
+
+    const isIterativeRedesign =
+      originalCode &&
+      ((originalCode.includes('export const ') || originalCode.includes('export function ')) &&
+        (lowerPrompt.includes('make') ||
+          lowerPrompt.includes('change') ||
+          lowerPrompt.includes('turn') ||
+          lowerPrompt.includes('color') ||
+          lowerPrompt.includes('rounded') ||
+          lowerPrompt.includes('pill') ||
+          lowerPrompt.includes('label') ||
+          lowerPrompt.includes('title') ||
+          lowerPrompt.includes('text') ||
+          lowerPrompt.includes('border') ||
+          lowerPrompt.includes('compact') ||
+          lowerPrompt.includes('dark') ||
+          lowerPrompt.includes('red') ||
+          lowerPrompt.includes('green') ||
+          lowerPrompt.includes('emerald') ||
+          lowerPrompt.includes('blue') ||
+          lowerPrompt.includes('yellow') ||
+          lowerPrompt.includes('purple') ||
+          hasAnimationTokens)) ||
+      (originalCode && originalCode.includes('<') && hasAnimationTokens);
+
+    if (isIterativeRedesign) {
+      const modResult = this.modifyComponentCode(originalCode, prompt);
+      return {
+        analysis: `Updated component styling according to prompt: "${prompt}". Preserved accessibility standards and component contract.`,
+        redesignedCode: modResult.modifiedCode,
+        framework: 'react-tailwind',
+        explanation: `Applied modifications based on your prompt: ${modResult.appliedChanges.join(', ') || 'Updated styling'}.`,
+        accessibilityImprovements: [
+          'Maintained accessible contrast and responsive hit-targets.',
+          'Retained focus/active interaction states for keyboard and mouse navigation.',
+        ],
+        stylingDiffSummary: modResult.appliedChanges.length > 0 ? modResult.appliedChanges : [`Applied custom user prompt: "${prompt}"`],
+      };
+    }
+
     const isGlassmorphic = lowerPrompt.includes('glass') || lowerPrompt.includes('blur') || lowerPrompt.includes('modern');
     const isDark = lowerPrompt.includes('dark') || lowerPrompt.includes('night');
     const isMinimalist = lowerPrompt.includes('minimal') || lowerPrompt.includes('clean');
     const isWcag = wcagFixRequested || lowerPrompt.includes('wcag') || lowerPrompt.includes('contrast') || lowerPrompt.includes('accessib');
-    
+
     const isNavbar =
       lowerPrompt.includes('nav') ||
       (originalCode && (originalCode.toLowerCase().includes('navbar') || /<nav\b/i.test(originalCode)));
@@ -132,21 +550,13 @@ export const TopNavbar: React.FC = () => {
           </a>
         </nav>
 
-        {/* Action button with minimum 44px touch target */}
+        {/* Action Button */}
         <div className="flex items-center gap-3">
           <button
             type="button"
-            className="hidden sm:inline-flex px-3.5 py-2 text-xs font-medium text-slate-300 hover:text-white transition-colors"
+            className="px-4 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-500 rounded-lg shadow-md shadow-indigo-600/25 transition-all focus:ring-2 focus:ring-indigo-400 focus:outline-none active:scale-95"
           >
             Sign In
-          </button>
-          <button
-            type="button"
-            className="inline-flex items-center gap-1.5 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white text-xs font-semibold rounded-lg shadow-md shadow-indigo-600/30 transition-all focus:ring-2 focus:ring-offset-2 focus:ring-offset-slate-900 focus:ring-indigo-400 min-h-[44px]"
-            aria-label="Start free trial"
-          >
-            <span>Get Started</span>
-            <ChevronRight className="w-3.5 h-3.5" />
           </button>
         </div>
       </div>
@@ -154,209 +564,178 @@ export const TopNavbar: React.FC = () => {
   );
 };`;
       accessibilityImprovements.push('Added explicit ARIA navigation landmark (`aria-label="Main Navigation"`)');
-      accessibilityImprovements.push('Ensured CTA button meets 44px minimum touch target size');
-      accessibilityImprovements.push('Upgraded contrast: text-slate-200 on dark background exceeds 7:1 ratio (WCAG AAA)');
-      stylingDiffSummary.push('Replaced plain white header with sticky backdrop-blur-md glassmorphism');
-      stylingDiffSummary.push('Added subtle pill navigation bar and modern gradient logo mark');
-    } else if (isButton) {
-      redesignedCode = `import React from 'react';
-import { Sparkles, ArrowUpRight } from 'lucide-react';
-
-interface ActionButtonProps {
-  label?: string;
-  onClick?: () => void;
-}
-
-export const ActionButton: React.FC<ActionButtonProps> = ({
-  label = "Deposit Funds",
-  onClick,
-}) => {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 active:from-blue-700 active:to-indigo-700 text-white font-semibold text-xs tracking-wide shadow-lg shadow-indigo-600/30 transition-all hover:shadow-indigo-600/50 hover:-translate-y-0.5 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:ring-offset-2 focus:ring-offset-slate-900 min-h-[44px] min-w-[120px]"
-      aria-label={label}
-    >
-      <Sparkles className="w-3.5 h-3.5 text-cyan-300" />
-      <span>{label}</span>
-      <ArrowUpRight className="w-3.5 h-3.5 opacity-80" />
-    </button>
-  );
-};`;
-      accessibilityImprovements.push('Enforced minimum 44×44px touch target for WCAG 2.5.5 compliance');
-      accessibilityImprovements.push('Added high-visibility focus-visible ring (focus:ring-2 focus:ring-indigo-400)');
-      accessibilityImprovements.push('High-contrast white text on indigo gradient (contrast ratio > 7:1)');
-      stylingDiffSummary.push('Replaced flat button with gradient glow and micro-elevation hover state');
-      stylingDiffSummary.push('Added leading icon and directional arrow glyph for visual affordance');
+      accessibilityImprovements.push('High-contrast typography with focus ring highlights');
+      stylingDiffSummary.push('Modern backdrop-blur glassmorphic header layout');
     } else if (isBalance) {
       redesignedCode = `import React from 'react';
-import { Sparkles, CheckCircle2 } from 'lucide-react';
+import { TrendingUp, ArrowUpRight, ArrowDownLeft, ShieldCheck, Wallet } from 'lucide-react';
 
-interface BalanceCardProps {
-  title?: string;
-  amount?: string;
-  change?: string;
-}
-
-export const BalanceCard: React.FC<BalanceCardProps> = ({
-  title = "Total Portfolio Value",
-  amount = "$48,295.40",
-  change = "+$1,420.50 (3.2%) today",
-}) => {
+export const BalanceCard: React.FC = () => {
   return (
-    <article className="p-6 bg-gradient-to-br from-indigo-900 via-slate-900 to-indigo-950 rounded-3xl border border-indigo-500/30 shadow-2xl shadow-indigo-950/60 relative overflow-hidden max-w-sm">
-      <div className="flex items-center justify-between">
-        <span className="text-xs font-medium text-indigo-200 tracking-wide">{title}</span>
-        <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
-          <CheckCircle2 className="w-3 h-3" />
-          Live
-        </span>
-      </div>
-      <h2 className="text-3xl font-extrabold text-white mt-2 tracking-tight">{amount}</h2>
-      <span className="text-xs font-semibold text-emerald-400 mt-1 inline-block">{change}</span>
-      <div className="mt-6 flex items-center gap-3">
-        <button
-          type="button"
-          className="flex-1 py-2.5 px-4 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-xl shadow-lg shadow-indigo-600/25 transition-all focus:ring-2 focus:ring-indigo-400 min-h-[44px]"
-        >
-          Deposit
-        </button>
-        <button
-          type="button"
-          className="flex-1 py-2.5 px-4 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white text-xs font-medium rounded-xl border border-slate-700 transition-all focus:ring-2 focus:ring-slate-400 min-h-[44px]"
-        >
-          Send
-        </button>
-      </div>
-    </article>
-  );
-};`;
-      accessibilityImprovements.push('Guaranteed text-emerald-400 and text-indigo-200 exceed WCAG AAA contrast (7.5:1)');
-      accessibilityImprovements.push('Action buttons have minimum 44px height and accessible focus rings');
-      accessibilityImprovements.push('Semantic `<article>` container with clear heading hierarchy');
-      stylingDiffSummary.push('Modernized balance card with deep slate/indigo gradient and glass glow');
-      stylingDiffSummary.push('Optimized dual-action pill buttons with tactile feedback');
-    } else if (isMetric) {
-      redesignedCode = `import React from 'react';
-import { Activity } from 'lucide-react';
+    <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-indigo-950 via-slate-900 to-slate-950 border border-indigo-500/20 p-6 shadow-2xl text-white">
+      {/* Background glow effects */}
+      <div className="absolute top-0 right-0 -mr-16 -mt-16 w-48 h-48 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none" />
+      <div className="absolute bottom-0 left-0 -ml-16 -mb-16 w-48 h-48 bg-cyan-500/10 rounded-full blur-3xl pointer-events-none" />
 
-interface MetricWidgetProps {
-  title?: string;
-  value?: string;
-  subtitle?: string;
-}
+      <div className="relative z-10">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <div className="p-2 rounded-xl bg-indigo-500/20 text-indigo-400">
+              <Wallet className="w-5 h-5" />
+            </div>
+            <span className="text-xs font-medium uppercase tracking-wider text-slate-400">Total Portfolio Value</span>
+          </div>
+          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+            <TrendingUp className="w-3.5 h-3.5" />
+            +14.2%
+          </span>
+        </div>
 
-export const MetricWidget: React.FC<MetricWidgetProps> = ({
-  title = "Active Core Telemetry",
-  value = "42.8%",
-  subtitle = "16 Cores Online • 3.4 GHz",
-}) => {
-  return (
-    <div className="p-5 bg-slate-900/90 backdrop-blur-md rounded-2xl border border-slate-800 shadow-xl max-w-sm">
-      <div className="flex items-center justify-between">
-        <span className="text-xs font-medium text-slate-400">{title}</span>
-        <span className="flex items-center gap-1.5 text-[10px] font-semibold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
-          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-          Optimal
-        </span>
+        <div className="mb-6">
+          <div className="text-3xl font-extrabold tracking-tight text-white mb-1">$48,259.40</div>
+          <p className="text-xs text-slate-400 flex items-center gap-1.5">
+            <ShieldCheck className="w-3.5 h-3.5 text-cyan-400" />
+            Insured Vault • Updated 2m ago
+          </p>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <button
+            type="button"
+            className="flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 font-semibold text-xs tracking-wide shadow-lg shadow-indigo-600/30 transition-all active:scale-[0.98] focus:ring-2 focus:ring-indigo-400 focus:outline-none"
+          >
+            <ArrowDownLeft className="w-4 h-4" />
+            Deposit
+          </button>
+          <button
+            type="button"
+            className="flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-slate-800/80 hover:bg-slate-700/80 border border-slate-700/60 font-semibold text-xs tracking-wide text-slate-200 transition-all active:scale-[0.98] focus:ring-2 focus:ring-slate-400 focus:outline-none"
+          >
+            <ArrowUpRight className="w-4 h-4" />
+            Send
+          </button>
+        </div>
       </div>
-      <div className="text-3xl font-mono font-extrabold text-emerald-400 mt-2 tracking-tight">{value}</div>
-      <p className="text-xs text-slate-400 mt-2 flex items-center gap-1">
-        <span>{subtitle}</span>
-      </p>
     </div>
   );
 };`;
-      accessibilityImprovements.push('Emerald telemetry metric provides high-contrast 8.2:1 ratio against slate background');
-      accessibilityImprovements.push('Semantic labels and status indicators readable by assistive tech');
-      stylingDiffSummary.push('Replaced plain box with rounded-2xl dark glassmorphic metric telemetry widget');
-      stylingDiffSummary.push('Integrated live animated status indicator and monospaced numerical typography');
-    } else {
-      // General Component / Feature Card Redesign
-      const bgStyle = isGlassmorphic
-        ? 'backdrop-blur-xl bg-slate-900/70 border border-slate-700/50 shadow-2xl shadow-indigo-950/40'
-        : isDark
-        ? 'bg-slate-900 border border-slate-800 shadow-xl'
-        : 'bg-white border border-slate-100 shadow-xl shadow-slate-200/50';
-
-      const textColor = isGlassmorphic || isDark ? 'text-white' : 'text-slate-900';
-      const subTextColor = isGlassmorphic || isDark ? 'text-slate-300' : 'text-slate-600';
-      const dividerColor = isGlassmorphic || isDark ? 'border-slate-800/60' : 'border-slate-200';
-
+      accessibilityImprovements.push('Semantic headings, touch targets > 44px, AAA contrast ratios');
+      stylingDiffSummary.push('Crypto glassmorphic gradient card with interactive primary action buttons');
+    } else if (isMetric) {
       redesignedCode = `import React from 'react';
-import { ArrowUpRight, Sparkles, CheckCircle2 } from 'lucide-react';
+import { Activity, Cpu, ArrowUpRight } from 'lucide-react';
+
+export const MetricWidget: React.FC = () => {
+  return (
+    <div className="rounded-2xl bg-slate-900 border border-slate-800 p-5 shadow-xl text-slate-100">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2 text-slate-400">
+          <Cpu className="w-4 h-4 text-cyan-400" />
+          <span className="text-xs font-semibold tracking-wider uppercase">Telemetry CPU Usage</span>
+        </div>
+        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+      </div>
+
+      <div className="flex items-baseline justify-between mb-4">
+        <div className="text-3xl font-mono font-bold text-white tracking-tight">42.8%</div>
+        <span className="text-xs font-medium text-emerald-400 flex items-center gap-0.5">
+          <ArrowUpRight className="w-3.5 h-3.5" />
+          Normal load
+        </span>
+      </div>
+
+      {/* Micro-bar chart */}
+      <div className="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
+        <div className="h-full bg-gradient-to-r from-cyan-500 to-indigo-500 rounded-full w-[42.8%]" />
+      </div>
+    </div>
+  );
+};`;
+      accessibilityImprovements.push('Telemetry ARIA status indicator and high-contrast monospace readout');
+      stylingDiffSummary.push('Dark telemetry metric widget with live gradient load bar');
+    } else if (isButton) {
+      redesignedCode = `import React from 'react';
+import { ArrowRight, Sparkles } from 'lucide-react';
+
+export const ActionButton: React.FC = () => {
+  return (
+    <button
+      type="button"
+      className="inline-flex items-center justify-center gap-2 px-6 py-3 min-h-[44px] rounded-xl font-semibold text-sm text-white bg-gradient-to-r from-indigo-600 via-indigo-500 to-blue-600 hover:from-indigo-500 hover:to-blue-500 shadow-lg shadow-indigo-500/25 transition-all duration-200 active:scale-[0.98] focus:ring-4 focus:ring-indigo-300 focus:outline-none"
+    >
+      <Sparkles className="w-4 h-4 text-cyan-300" />
+      <span>Deposit Funds</span>
+      <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-0.5" />
+    </button>
+  );
+};`;
+      accessibilityImprovements.push('Enforced minimum 44px touch target height for mobile WCAG 2.2 criteria');
+      accessibilityImprovements.push('Visible 4px focus ring indicator for keyboard navigation');
+      stylingDiffSummary.push('Accessible gradient action button with subtle active press micro-interaction');
+    } else {
+      // Default: FeatureCard
+      redesignedCode = `import React from 'react';
+import { Sparkles, ArrowRight, CheckCircle2 } from 'lucide-react';
 
 interface CardProps {
   title?: string;
   description?: string;
-  badge?: string;
   onAction?: () => void;
 }
 
 export const FeatureCard: React.FC<CardProps> = ({
-  title = "Intelligent AI Redesign",
-  description = "Automatically elevate your UI with high-contrast typography, balanced spacing, and interactive feedback.",
-  badge = "Pro Feature",
+  title = 'AI Vision Agent Studio',
+  description = 'Inspect visual element hierarchies, optimize WCAG 2.2 color contrast ratios, and generate production-ready code with intelligent design tokens.',
   onAction,
 }) => {
   return (
-    <article
-      className="group relative p-6 ${bgStyle} rounded-2xl transition-all duration-300 hover:-translate-y-1 hover:border-indigo-500/50"
-    >
-      {/* Decorative gradient glow */}
-      <div
-        className="absolute -inset-px rounded-2xl bg-gradient-to-r from-indigo-500/20 via-cyan-500/20 to-purple-500/0 opacity-0 group-hover:opacity-100 transition-opacity -z-10 blur-sm pointer-events-none"
-        aria-hidden="true"
-      />
+    <article className="relative group overflow-hidden rounded-2xl bg-white/5 backdrop-blur-xl border border-white/10 p-6 shadow-2xl transition-all duration-300 hover:border-indigo-500/50 hover:shadow-indigo-500/10">
+      {/* Gradient highlight sheen */}
+      <div className="absolute top-0 right-0 -mt-8 -mr-8 w-32 h-32 bg-indigo-500/20 rounded-full blur-2xl group-hover:scale-150 transition-transform duration-500 pointer-events-none" />
 
-      <div className="flex items-center justify-between gap-3">
-        <span
-          className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-indigo-500/10 text-indigo-400 border border-indigo-500/20"
-        >
-          <Sparkles className="w-3 h-3" />
-          {badge}
-        </span>
-        <span className="text-xs text-slate-400 flex items-center gap-1">
-          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-          WCAG 2.2 AAA
-        </span>
-      </div>
+      <div className="relative z-10 flex flex-col h-full justify-between">
+        <div>
+          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 mb-4">
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>Smart Component</span>
+          </div>
 
-      <h3 className="text-lg font-semibold ${textColor} mt-4 tracking-tight leading-snug">
-        {title}
-      </h3>
+          <h3 className="text-xl font-bold text-white tracking-tight mb-2 group-hover:text-indigo-200 transition-colors">
+            {title}
+          </h3>
 
-      <p className="text-sm ${subTextColor} mt-2 leading-relaxed">
-        {description}
-      </p>
+          <p className="text-sm text-slate-300 leading-relaxed mb-6">
+            {description}
+          </p>
+        </div>
 
-      <div className="mt-6 pt-4 border-t ${dividerColor} flex items-center justify-between">
-        <button
-          type="button"
-          onClick={onAction}
-          className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white text-xs font-semibold shadow-lg shadow-indigo-600/25 transition-all focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:ring-offset-2 focus:ring-offset-slate-900 min-h-[44px]"
-          aria-label="Learn more about this feature"
-        >
-          <span>Explore Component</span>
-          <ArrowUpRight className="w-3.5 h-3.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
-        </button>
+        <div className="pt-4 border-t border-white/10 flex items-center justify-between">
+          <div className="flex items-center gap-1.5 text-xs font-medium text-emerald-400">
+            <CheckCircle2 className="w-4 h-4" />
+            <span>WCAG AAA Compliant</span>
+          </div>
+
+          <button
+            type="button"
+            onClick={onAction}
+            className="inline-flex items-center gap-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-500 px-4 py-2 min-h-[44px] rounded-lg shadow-md transition-all active:scale-95 focus:ring-2 focus:ring-indigo-400 focus:outline-none"
+          >
+            <span>Explore Component</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
       </div>
     </article>
   );
 };`;
-
-      accessibilityImprovements.push('Guaranteed high-contrast text ratios exceeding WCAG AAA standards (7:1)');
-      accessibilityImprovements.push('Maintained a minimum touch target size of 44x44px with keyboard focus outlines');
-      accessibilityImprovements.push('Added semantic HTML `<article>` tag and decorative `aria-hidden` attributes');
-
-      stylingDiffSummary.push('Replaced flat borders with rounded-2xl glassmorphic panel & glow effect');
-      stylingDiffSummary.push('Added micro-interactions: card elevation on hover and animated arrow glyph');
-      stylingDiffSummary.push('Improved typographic hierarchy: tracking-tight title and relaxed body text');
+      accessibilityImprovements.push('Maintained WCAG 2.2 AA contrast ratios (>4.5:1 text, >3:1 UI boundaries)');
+      accessibilityImprovements.push('Enforced 44px minimum touch targets on all interactive click handlers');
+      accessibilityImprovements.push('Added explicit focus rings and visible keyboard states');
+      stylingDiffSummary.push('Transformed into a modern glassmorphic card with subtle depth and responsive typography');
     }
 
     return {
-      analysis: `Analyzed component structure: replaced outdated flat styling with a high-contrast modern design token architecture. Integrated responsive padding, micro-animations, and verified WCAG accessibility compliance.`,
+      analysis: `Analyzed UI intent: "${prompt}". Designed a high-fidelity modern component following Tailwind CSS best practices and WCAG 2.2 accessibility guidelines.`,
       redesignedCode,
       framework: 'react-tailwind',
       explanation: `I redesigned your component with contemporary UI/UX best practices:
@@ -369,58 +748,61 @@ export const FeatureCard: React.FC<CardProps> = ({
   }
 
   /**
-   * Gemini API integration
+   * Gemini API client (optional external integration)
    */
   private async callGemini(request: RedesignRequest): Promise<RedesignResponse | null> {
     const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
     if (!apiKey) return null;
 
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                {
-                  text: `You are an expert UI/UX designer and frontend engineer. Redesign this component according to user prompt: "${request.prompt}".
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${apiKey}`;
+
+    const promptText = `
+You are a senior UI/UX engineer and React Tailwind expert.
+Redesign the provided UI component according to this prompt: "${request.prompt}".
 Original Code:
 ${request.originalCode || 'None provided'}
 
-Return your response in valid JSON matching this schema:
+Return a JSON object conforming to:
 {
-  "analysis": "string",
-  "redesignedCode": "string (complete React + Tailwind code)",
+  "analysis": "Brief analysis",
+  "redesignedCode": "Valid, self-contained React functional component with Tailwind CSS",
   "framework": "react-tailwind",
-  "explanation": "string",
-  "accessibilityImprovements": ["string"],
-  "stylingDiffSummary": ["string"]
-}`,
-                },
-              ],
-            },
-          ],
-        }),
-      }
-    );
+  "explanation": "Markdown explanation of improvements",
+  "accessibilityImprovements": ["array of improvements"],
+  "stylingDiffSummary": ["array of diff items"]
+}
+`;
 
-    if (!response.ok) {
-      throw new Error(`Gemini HTTP ${response.status}: ${await response.text()}`);
+    const parts: any[] = [{ text: promptText }];
+    if (request.imageSnippetBase64) {
+      const mime = request.imageSnippetBase64.startsWith('data:image/jpeg') ? 'image/jpeg' : 'image/png';
+      const cleanBase64 = request.imageSnippetBase64.replace(/^data:image\/[a-z]+;base64,/, '');
+      parts.push({
+        inlineData: {
+          mimeType: mime,
+          data: cleanBase64,
+        },
+      });
     }
 
-    const data: any = await response.json();
-    const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!rawText) return null;
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts }],
+        generationConfig: { responseMimeType: 'application/json' },
+      }),
+    });
 
-    // Clean JSON markdown fences
-    const cleanJson = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
-    return JSON.parse(cleanJson);
+    if (!response.ok) return null;
+    const data: any = await response.json();
+    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!text) return null;
+    return this.safeParseJson(text);
   }
 
   /**
-   * Claude API integration
+   * Claude API client (optional external integration)
    */
   private async callClaude(request: RedesignRequest): Promise<RedesignResponse | null> {
     const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -429,17 +811,17 @@ Return your response in valid JSON matching this schema:
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
         'x-api-key': apiKey,
         'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json',
       },
       body: JSON.stringify({
         model: 'claude-3-5-sonnet-20241022',
-        max_tokens: 3000,
+        max_tokens: 4096,
         messages: [
           {
             role: 'user',
-            content: `You are an expert UI/UX engineer. Redesign this component: ${request.prompt}. Original code: ${request.originalCode}. Respond ONLY with valid JSON having fields analysis, redesignedCode, framework, explanation, accessibilityImprovements, stylingDiffSummary.`,
+            content: `You are an expert UI/UX developer. Redesign this component: ${request.prompt}. Code: ${request.originalCode}. Return pure JSON with analysis, redesignedCode, framework, explanation, accessibilityImprovements, stylingDiffSummary.`,
           },
         ],
       }),
@@ -449,12 +831,11 @@ Return your response in valid JSON matching this schema:
     const data: any = await response.json();
     const text = data?.content?.[0]?.text;
     if (!text) return null;
-    const clean = text.replace(/```json/g, '').replace(/```/g, '').trim();
-    return JSON.parse(clean);
+    return this.safeParseJson(text);
   }
 
   /**
-   * OpenAI API integration
+   * OpenAI API client (optional external integration)
    */
   private async callOpenAI(request: RedesignRequest): Promise<RedesignResponse | null> {
     const apiKey = process.env.OPENAI_API_KEY;
@@ -463,11 +844,12 @@ Return your response in valid JSON matching this schema:
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'gpt-4o-mini',
+        model: 'gpt-4o',
+        response_format: { type: 'json_object' },
         messages: [
           {
             role: 'system',
@@ -485,8 +867,27 @@ Return your response in valid JSON matching this schema:
     const data: any = await response.json();
     const text = data?.choices?.[0]?.message?.content;
     if (!text) return null;
-    const clean = text.replace(/```json/g, '').replace(/```/g, '').trim();
-    return JSON.parse(clean);
+    return this.safeParseJson(text);
+  }
+
+  /**
+   * Safely extracts and parses JSON even if surrounded by conversational markdown
+   */
+  private safeParseJson(rawText: string): any {
+    const clean = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
+    try {
+      return JSON.parse(clean);
+    } catch {
+      const jsonMatch = clean.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        try {
+          return JSON.parse(jsonMatch[0]);
+        } catch {
+          return null;
+        }
+      }
+      return null;
+    }
   }
 }
 

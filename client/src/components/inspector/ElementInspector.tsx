@@ -18,12 +18,16 @@ interface ElementInspectorProps {
   element: InteractiveElement | null;
   onFixAccessibility: () => void;
   onSearchInWorkspace: (elem: InteractiveElement) => void;
+  matchedFilePath?: string;
+  matchedFileContent?: string;
 }
 
 export const ElementInspector: React.FC<ElementInspectorProps> = ({
   element,
   onFixAccessibility,
   onSearchInWorkspace,
+  matchedFilePath,
+  matchedFileContent,
 }) => {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
@@ -225,27 +229,46 @@ export const ElementInspector: React.FC<ElementInspectorProps> = ({
             <FileCode className="w-3.5 h-3.5 text-indigo-400" />
             <span>Workspace Code Match</span>
           </span>
+          {matchedFilePath && (
+            <span className="text-[10px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-1.5 py-0.5 rounded font-mono flex items-center gap-1">
+              <CheckCircle2 className="w-2.5 h-2.5" />
+              Linked to Local File
+            </span>
+          )}
         </div>
+
+        {matchedFilePath && (
+          <div className="p-2 bg-studio-950 border border-emerald-500/30 rounded-lg mb-2">
+            <p className="font-mono text-[11px] text-emerald-300 truncate" title={matchedFilePath}>
+              {matchedFilePath}
+            </p>
+          </div>
+        )}
 
         <button
           onClick={() => onSearchInWorkspace(element)}
           className="w-full flex items-center justify-center gap-1.5 py-1.5 bg-studio-800 hover:bg-studio-700 text-studio-200 border border-studio-700 rounded-lg text-xs font-medium transition-all"
         >
           <Search className="w-3.5 h-3.5 text-indigo-400" />
-          <span>Find Component in Workspace</span>
+          <span>{matchedFilePath ? 'Switch or Change File' : 'Find Component in Workspace'}</span>
         </button>
       </div>
 
       {/* Component Code Snippet Preview */}
-      {element.codeSnippet && (
+      {(matchedFileContent || element.codeSnippet) && (
         <div className="p-4">
           <div className="flex items-center justify-between mb-2">
             <span className="font-semibold text-studio-200 flex items-center gap-1.5">
               <Code2 className="w-3.5 h-3.5 text-indigo-400" />
               <span>Component Code</span>
+              {matchedFilePath && (
+                <span className="text-[9px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-1 py-0.5 rounded font-mono">
+                  (local file)
+                </span>
+              )}
             </span>
             <button
-              onClick={() => copyToClipboard(element.codeSnippet || '', 'snippet')}
+              onClick={() => copyToClipboard(matchedFileContent || element.codeSnippet || '', 'snippet')}
               className="flex items-center gap-1 font-mono text-[11px] text-studio-400 hover:text-white"
             >
               {copiedKey === 'snippet' ? (
@@ -256,9 +279,9 @@ export const ElementInspector: React.FC<ElementInspectorProps> = ({
               <span>{copiedKey === 'snippet' ? 'Copied' : 'Copy'}</span>
             </button>
           </div>
-          <div className="bg-studio-950 p-2.5 rounded-lg border border-studio-800 max-h-40 overflow-y-auto overflow-x-hidden">
+          <div className="bg-studio-950 p-2.5 rounded-lg border border-studio-800 max-h-48 overflow-y-auto overflow-x-hidden">
             <pre className="font-mono text-[10px] text-studio-300 whitespace-pre-wrap break-all leading-relaxed">
-              {element.codeSnippet}
+              {matchedFileContent || element.codeSnippet}
             </pre>
           </div>
         </div>
