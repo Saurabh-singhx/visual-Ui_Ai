@@ -1,7 +1,99 @@
 import { Router, Request, Response } from 'express';
+import path from 'path';
+import fs from 'fs';
 import { workspacePatcherService } from '../services/workspacePatcherService';
+import { propSynthesisService } from '../services/propSynthesisService';
 
 const router = Router();
+
+// ==========================================
+// Canvas State for Agent-Decided Rendering (R2)
+// ==========================================
+
+interface CanvasState {
+  activeComponent: {
+    name: string;
+    filePath: string;
+    code: string;
+    rawCode?: string;
+    props: Record<string, any>;
+    isVirtual: boolean;
+    viewport?: { width: number; height: number };
+  } | null;
+  timestamp: number;
+}
+
+let activeCanvasState: CanvasState = {
+  activeComponent: null,
+  timestamp: Date.now(),
+};
+
+async function handleCanvasRender(req: Request, res: Response) {
+  try {
+    const { filePath, componentName, code, props, viewport } = req.body;
+
+    let targetCode = code;
+    let resolvedFilePath = filePath || '';
+    let resolvedName = componentName || '';
+
+    if (!targetCode && resolvedFilePath) {
+      const fullPath = path.isAbsolute(resolvedFilePath)
+        ? resolvedFilePath
+        : path.resolve(process.env.WORKSPACE_DIR || process.cwd(), resolvedFilePath);
+
+      if (!fs.existsSync(fullPath)) {
+        return res.status(404).json({ success: false, error: `Component file not found: ${resolvedFilePath}` });
+      }
+      targetCode = await fs.promises.readFile(fullPath, 'utf8');
+      resolvedFilePath = fullPath;
+    }
+
+    if (!targetCode) {
+      return res.status(400).json({ success: false, error: 'Either filePath or code must be provided' });
+    }
+
+    if (!resolvedName) {
+      if (resolvedFilePath) {
+        resolvedName = path.basename(resolvedFilePath).replace(/\.[^.]+$/, '');
+      } else {
+        const match = targetCode.match(/(?:export\s+(?:default\s+)?(?:const|function|class)\s+|function\s+)([A-Z][A-Za-z0-9_]*)/);
+        resolvedName = match ? match[1] : 'ActiveComponent';
+      }
+    }
+
+    const synthesizedProps = propSynthesisService.synthesizeProps(targetCode, props, resolvedName);
+    const adaptedCode = propSynthesisService.adaptImports(targetCode);
+
+    activeCanvasState = {
+      activeComponent: {
+        name: resolvedName,
+        filePath: resolvedFilePath,
+        code: adaptedCode,
+        rawCode: targetCode,
+        props: synthesizedProps,
+        isVirtual: !resolvedFilePath,
+        viewport: viewport || { width: 1200, height: 750 },
+      },
+      timestamp: Date.now(),
+    };
+
+    res.json({
+      success: true,
+      activeComponent: activeCanvasState.activeComponent,
+      synthesizedProps,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+}
+
+function handleCanvasState(req: Request, res: Response) {
+  res.json({
+    success: true,
+    activeComponent: activeCanvasState.activeComponent,
+    timestamp: activeCanvasState.timestamp,
+  });
+}
 
 // ==========================================
 // Handlers for M1 Discovery Engine Endpoints
@@ -221,5 +313,9 @@ router.post(['/rollback', '/workspace/rollback'], (req: Request, res: Response) 
   }
   return handleWorkspaceRollback(req, res);
 });
+
+// 3. Canvas State Endpoints (R2)
+router.post(['/canvas/render', '/render'], handleCanvasRender);
+router.get(['/canvas/state', '/state'], handleCanvasState);
 
 export default router;

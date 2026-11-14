@@ -26,6 +26,10 @@ visual-ui start --dir "$PWD" --port 3838
 
 # 3. Direct element modification via CLI (optional alternative to web dashboard)
 visual-ui modify --file "./src/components/Card.tsx" --prompt "Change button to emerald rounded pill with smooth hover scale"
+
+# 4. Focus canvas on startup or render a component directly
+visual-ui start --dir "$PWD" --file "./src/components/Card.tsx"
+visual-ui render --file "./src/components/Card.tsx"
 ```
 
 ---

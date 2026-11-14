@@ -15,6 +15,7 @@ import {
   X,
 } from 'lucide-react';
 import { computeLineDiff } from '../../utils/diffUtils';
+import { CodeEditor } from '../editor/CodeEditor';
 
 interface LivePreviewProps {
   redesignedCode: string;
@@ -414,10 +415,14 @@ export const LivePreview: React.FC<LivePreviewProps> = ({
         )}
 
         {activeTab === 'code' && (
-          <div className="w-full h-full flex flex-col">
-            <div className="flex-1 bg-studio-900/90 rounded-xl border border-studio-800 p-4 font-mono text-xs overflow-auto text-studio-200 leading-relaxed select-text">
-              <pre className="whitespace-pre">{redesignedCode}</pre>
-            </div>
+          <div className="w-full h-full flex flex-col p-2">
+            <CodeEditor
+              initialCode={redesignedCode}
+              onSave={async () => {
+                onApplyPatch();
+              }}
+              title="Redesigned Component Code"
+            />
           </div>
         )}
 

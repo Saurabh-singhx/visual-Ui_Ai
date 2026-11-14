@@ -283,4 +283,53 @@ export const TestButton = () => {
       expect(res.body.success).toBe(true);
     });
   });
+
+  // 6. Canvas State Endpoints (R2)
+  describe('Canvas State Endpoints', () => {
+    it('POST /api/canvas/render accepts code and synthesizes props and state', async () => {
+      const code = `
+        interface CardProps {
+          title: string;
+          count?: number;
+        }
+        export const FeatureCard = ({ title = 'Default', count = 5 }: CardProps) => (
+          <div className="card"><h3>{title}</h3><span>{count}</span></div>
+        );
+      `;
+
+      const res = await request(app)
+        .post('/api/canvas/render')
+        .send({
+          componentName: 'FeatureCard',
+          code,
+          props: { count: 99 },
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.activeComponent).toBeDefined();
+      expect(res.body.activeComponent.name).toBe('FeatureCard');
+      expect(res.body.activeComponent.props.count).toBe(99);
+      expect(res.body.synthesizedProps.count).toBe(99);
+    });
+
+    it('GET /api/canvas/state returns current active canvas state', async () => {
+      const res = await request(app).get('/api/canvas/state');
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.activeComponent).toBeDefined();
+      expect(res.body.timestamp).toBeTypeOf('number');
+    });
+
+    it('POST /api/canvas/render renders component from filePath', async () => {
+      const res = await request(app)
+        .post('/api/canvas/render')
+        .send({ filePath: buttonPath });
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.activeComponent.name).toBe('TestButton');
+      expect(res.body.activeComponent.code).toContain('TestButton');
+    });
+  });
 });

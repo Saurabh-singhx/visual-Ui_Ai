@@ -42,6 +42,14 @@ export const VisualCanvas: React.FC<VisualCanvasProps> = ({
   const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
   const [currentDragBox, setCurrentDragBox] = useState<BoundingBox | null>(null);
 
+  // Canvas width drag resize state (320px - 1920px)
+  const [isResizingCanvasWidth, setIsResizingCanvasWidth] = useState<boolean>(false);
+  const resizeStartX = useRef<number>(0);
+  const resizeStartWidth = useRef<number>(1200);
+
+  // Focused Stage view toggle for workspace mode
+  const [isFocusedView, setIsFocusedView] = useState<boolean>(true);
+
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -50,6 +58,38 @@ export const VisualCanvas: React.FC<VisualCanvasProps> = ({
   const [paneWidth, setPaneWidth] = useState<number>(672);
 
   const currentDragBoxRef = useRef<BoundingBox | null>(null);
+
+  // Interactive canvas width resize handler (320px – 1920px)
+  const handleStartResizeWidth = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsResizingCanvasWidth(true);
+    resizeStartX.current = e.clientX;
+    resizeStartWidth.current = currentApp?.viewport?.width || 1200;
+  };
+
+  useEffect(() => {
+    if (!isResizingCanvasWidth) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!currentApp) return;
+      const deltaX = (e.clientX - resizeStartX.current) / zoom;
+      const newWidth = Math.min(1920, Math.max(320, Math.round(resizeStartWidth.current + deltaX)));
+      currentApp.viewport = { ...currentApp.viewport, width: newWidth };
+      setPaneWidth(newWidth);
+    };
+
+    const handleMouseUp = () => {
+      setIsResizingCanvasWidth(false);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isResizingCanvasWidth, currentApp, zoom]);
 
   // Calculate fit scale so viewport fits within container without overflow
   const fitToScreen = useCallback(() => {
@@ -558,6 +598,23 @@ export const VisualCanvas: React.FC<VisualCanvasProps> = ({
               isMobile ? 'rounded-[44px] p-3 ring-8 ring-studio-800/80 box-content' : 'rounded-xl box-border'
             }`}
           >
+            {/* Draggable Width Resize Handle (320px - 1920px) */}
+            <div
+              onMouseDown={handleStartResizeWidth}
+              className={`absolute top-0 right-0 -mr-2.5 w-5 h-full cursor-ew-resize flex items-center justify-center z-40 select-none group ${
+                isResizingCanvasWidth ? 'opacity-100' : 'opacity-60 hover:opacity-100'
+              }`}
+              title="Drag right edge to resize canvas width (320px – 1920px)"
+            >
+              <div
+                className={`w-1.5 h-12 rounded-full transition-all shadow-md ${
+                  isResizingCanvasWidth
+                    ? 'bg-indigo-400 scale-y-125 ring-2 ring-indigo-400/50'
+                    : 'bg-studio-500 group-hover:bg-indigo-400 group-hover:scale-y-110'
+                }`}
+              />
+            </div>
+
             {/* Mobile phone notch/island header */}
             {isMobile && (
               <div className="absolute top-2 left-1/2 -translate-x-1/2 w-28 h-4 bg-black rounded-full z-30" />
@@ -593,9 +650,9 @@ export const VisualCanvas: React.FC<VisualCanvasProps> = ({
 
             {/* Workspace Live Application Canvas */}
             {!currentApp.screenshotUrl && !currentApp.iframeUrl && currentApp.isWorkspace && (
-              <div className="w-full h-full bg-slate-950 text-white font-sans relative overflow-hidden p-6 select-none">
+              <div className="w-full h-full bg-slate-950 text-white font-sans relative overflow-hidden flex flex-col select-none">
                 {/* Workspace Top Status Bar */}
-                <div className="flex items-center justify-between text-xs text-slate-400 border-b border-slate-800/80 pb-2 mb-4">
+                <div className="h-9 px-4 bg-slate-900/80 border-b border-slate-800 flex items-center justify-between text-xs text-slate-400 shrink-0">
                   <div className="flex items-center gap-2">
                     <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block animate-pulse" />
                     <span className="font-semibold text-white">{currentApp.name}</span>
@@ -604,50 +661,118 @@ export const VisualCanvas: React.FC<VisualCanvasProps> = ({
                       {currentApp.interactiveElements.length} Live Component{currentApp.interactiveElements.length === 1 ? '' : 's'}
                     </span>
                   </div>
-                  <span className="font-mono text-[11px] text-slate-500 truncate max-w-md">
-                    {currentApp.workspacePath || ''}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    {currentApp.interactiveElements.length > 1 && (
+                      <div className="flex items-center bg-slate-800 rounded p-0.5 border border-slate-700">
+                        <button
+                          type="button"
+                          onClick={() => setIsFocusedView(true)}
+                          className={`px-2 py-0.5 rounded text-[10px] ${
+                            isFocusedView ? 'bg-indigo-600 text-white font-medium' : 'text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          Focused
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setIsFocusedView(false)}
+                          className={`px-2 py-0.5 rounded text-[10px] ${
+                            !isFocusedView ? 'bg-indigo-600 text-white font-medium' : 'text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          Grid
+                        </button>
+                      </div>
+                    )}
+                    <span className="font-mono text-[11px] text-slate-500 truncate max-w-xs">
+                      {currentApp.workspacePath || ''}
+                    </span>
+                  </div>
                 </div>
 
-                {/* Render Each Real Workspace Component */}
-                {currentApp.interactiveElements.map((elem) => {
-                  const isElemSelected = selectedElement?.id === elem.id;
-                  const displayCode =
-                    isElemSelected && redesignedCode
-                      ? redesignedCode
-                      : isElemSelected && matchedFileContent
-                      ? matchedFileContent
-                      : elem.codeSnippet || '';
+                {/* Focused Stage or Multi-Card Grid */}
+                {isFocusedView && (selectedElement || currentApp.interactiveElements.length > 0) ? (
+                  (() => {
+                    const activeElem = selectedElement || currentApp.interactiveElements[0];
+                    const isElemSelected = selectedElement?.id === activeElem.id;
+                    const displayCode =
+                      isElemSelected && redesignedCode
+                        ? redesignedCode
+                        : isElemSelected && matchedFileContent
+                        ? matchedFileContent
+                        : activeElem.codeSnippet || '';
 
-                  return (
-                    <div
-                      key={elem.id}
-                      style={{
-                        left: elem.bounds.x,
-                        top: elem.bounds.y,
-                        width: elem.bounds.width,
-                        height: elem.bounds.height,
-                      }}
-                      className="absolute rounded-xl overflow-hidden shadow-xl border border-slate-800/90 bg-slate-900/60 backdrop-blur-sm transition-all flex flex-col"
-                    >
-                      <div className="h-6 px-3 bg-slate-900/90 border-b border-slate-800/60 flex items-center justify-between text-[10px] text-slate-400 font-mono">
-                        <span className="text-indigo-300 font-semibold truncate">&lt;{elem.name}&gt;</span>
-                        <span className="text-slate-500 truncate max-w-[140px]">
-                          {elem.relativePath || elem.bounds.width + '×' + elem.bounds.height + 'px'}
-                        </span>
+                    return (
+                      <div className="flex-1 w-full flex flex-col items-center justify-center p-6 overflow-auto">
+                        <div
+                          style={{
+                            width: Math.min(Math.max(activeElem.bounds.width || 600, 640), currentApp.viewport.width - 48),
+                            minHeight: Math.min(Math.max(activeElem.bounds.height || 360, 360), currentApp.viewport.height - 120),
+                          }}
+                          className="rounded-2xl overflow-hidden shadow-2xl border border-slate-800 bg-slate-900/90 backdrop-blur-md flex flex-col max-w-full"
+                        >
+                          <div className="h-8 px-4 bg-slate-900 border-b border-slate-800 flex items-center justify-between text-xs text-slate-300 font-mono">
+                            <span className="text-indigo-400 font-semibold flex items-center gap-1.5">
+                              <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                              &lt;{activeElem.name}&gt;
+                            </span>
+                            <span className="text-slate-500 text-[11px] truncate max-w-sm">
+                              {activeElem.filePath || activeElem.relativePath || 'Focused Component'}
+                            </span>
+                          </div>
+                          <div
+                            className="flex-1 overflow-auto p-6 flex flex-col justify-start items-stretch"
+                            dangerouslySetInnerHTML={{
+                              __html: extractRenderableHtml(displayCode, activeElem.name),
+                            }}
+                          />
+                        </div>
                       </div>
-                      <div
-                        className="flex-1 overflow-auto p-3 flex flex-col justify-start items-stretch"
-                        dangerouslySetInnerHTML={{
-                          __html: extractRenderableHtml(displayCode, elem.name),
-                        }}
-                      />
-                    </div>
-                  );
-                })}
+                    );
+                  })()
+                ) : (
+                  <div className="flex-1 w-full relative overflow-auto p-6">
+                    {/* Render Each Real Workspace Component in Grid */}
+                    {currentApp.interactiveElements.map((elem) => {
+                      const isElemSelected = selectedElement?.id === elem.id;
+                      const displayCode =
+                        isElemSelected && redesignedCode
+                          ? redesignedCode
+                          : isElemSelected && matchedFileContent
+                          ? matchedFileContent
+                          : elem.codeSnippet || '';
+
+                      return (
+                        <div
+                          key={elem.id}
+                          style={{
+                            left: elem.bounds.x,
+                            top: elem.bounds.y,
+                            width: elem.bounds.width,
+                            height: elem.bounds.height,
+                          }}
+                          className="absolute rounded-xl overflow-hidden shadow-xl border border-slate-800/90 bg-slate-900/60 backdrop-blur-sm transition-all flex flex-col"
+                        >
+                          <div className="h-6 px-3 bg-slate-900/90 border-b border-slate-800/60 flex items-center justify-between text-[10px] text-slate-400 font-mono">
+                            <span className="text-indigo-300 font-semibold truncate">&lt;{elem.name}&gt;</span>
+                            <span className="text-slate-500 truncate max-w-[140px]">
+                              {elem.relativePath || elem.bounds.width + '×' + elem.bounds.height + 'px'}
+                            </span>
+                          </div>
+                          <div
+                            className="flex-1 overflow-auto p-3 flex flex-col justify-start items-stretch"
+                            dangerouslySetInnerHTML={{
+                              __html: extractRenderableHtml(displayCode, elem.name),
+                            }}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
 
                 {currentApp.interactiveElements.length === 0 && (
-                  <div className="flex flex-col items-center justify-center h-64 text-center text-slate-400">
+                  <div className="flex flex-col items-center justify-center flex-1 text-center text-slate-400">
                     <p className="text-sm font-medium text-slate-300">No UI components found in workspace directory</p>
                     <p className="text-xs text-slate-500 mt-1">
                       Directory has no .tsx, .jsx, or .html components to inspect.

@@ -64,11 +64,12 @@ app.get('/api/health', (req: Request, res: Response) => {
   });
 });
 
-// Mount Routes: Workspace (plus project and component aliases) and AI
+// Mount Routes: Workspace (plus project and component aliases), Canvas, and AI
 app.use('/api', workspaceRoutes);
 app.use('/api/workspace', workspaceRoutes);
 app.use('/api/project', workspaceRoutes);
 app.use('/api/component', workspaceRoutes);
+app.use('/api/canvas', workspaceRoutes);
 app.use('/api/ai', aiRoutes);
 
 // SPA Fallback: Route any non-API GET request to client/dist/index.html (Express 5 safe)

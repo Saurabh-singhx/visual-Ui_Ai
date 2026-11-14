@@ -3,23 +3,49 @@ import {
   WorkspaceFile,
   WorkspaceSearchResult,
   PatchApplyResult,
-  AdbDevice,
 } from '../types';
 
 const BASE_URL = '/api';
 
 export const api = {
-  // Capture & Samples
-  async getSamples(): Promise<SampleApp[]> {
-    try {
-      const res = await fetch(`${BASE_URL}/capture/samples`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      return data.samples || [];
-    } catch (err) {
-      console.warn('Failed to fetch samples from backend, using fallback samples:', err);
-      return [];
+  // Canvas State & In-Session Rendering (R2)
+  async renderCanvas(payload: {
+    filePath?: string;
+    componentName?: string;
+    code?: string;
+    props?: Record<string, any>;
+    viewport?: { width?: number; height?: number };
+  }): Promise<{
+    success: boolean;
+    activeComponent: {
+      name: string;
+      filePath: string;
+      code: string;
+      props: any;
+      isVirtual: boolean;
+    };
+    synthesizedProps: any;
+  }> {
+    const res = await fetch(`${BASE_URL}/canvas/render`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Failed to render canvas' }));
+      throw new Error(err.error || `HTTP ${res.status}`);
     }
+    return await res.json();
+  },
+
+  async getCanvasState(): Promise<{
+    success: boolean;
+    activeComponent: any;
+    timestamp: number;
+  }> {
+    const res = await fetch(`${BASE_URL}/canvas/state`);
+    if (!res.ok) throw new Error('Failed to get canvas state');
+    return await res.json();
   },
 
   // AI Redesign
@@ -155,35 +181,5 @@ export const api = {
       throw new Error(data.message || data.error || 'Failed to rollback file');
     }
     return data;
-  },
-
-  // ADB
-  async getAdbDevices(): Promise<AdbDevice[]> {
-    try {
-      const res = await fetch(`${BASE_URL}/adb/devices`);
-      if (!res.ok) return [];
-      const data = await res.json();
-      return data.devices || [];
-    } catch {
-      return [];
-    }
-  },
-
-  async getAdbHierarchy(deviceId?: string, useSample?: boolean) {
-    const res = await fetch(`${BASE_URL}/adb/hierarchy`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ deviceId, useSample }),
-    });
-    return await res.json();
-  },
-
-  async captureAdbScreen(deviceId?: string) {
-    const res = await fetch(`${BASE_URL}/adb/capture`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ deviceId }),
-    });
-    return await res.json();
   },
 };

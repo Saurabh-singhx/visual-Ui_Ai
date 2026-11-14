@@ -22,6 +22,7 @@ Commands:
   scan     Scan project directory and list all UI components (Web, Mobile, Desktop)
   start    Start the visual workbench server and dashboard
   modify   Modify a component or element using prompt instructions
+  render   Inject and render a focused component on the active canvas
 
 Options:
   -h, --help     Show help information
@@ -358,6 +359,7 @@ Options:
   --port <number>    Port to listen on (default: 3838)
   --dir <path>       Workspace directory to link (default: current working directory)
   --focus <path>     Initial directory focus
+  --file <path>      Focus canvas strictly on a specific component file
   -h, --help         Show this help message
 `);
     process.exit(0);
@@ -365,9 +367,13 @@ Options:
 
   const port = flags.port || process.env.PORT || 3838;
   const targetDir = path.resolve(flags.dir || process.cwd());
+  const focusFile = flags.file ? path.resolve(flags.file) : '';
 
   console.log(`🚀 Starting Visual UI Studio on port ${port}...`);
   console.log(`📁 Target Workspace: ${targetDir}`);
+  if (focusFile) {
+    console.log(`🎯 Focused Component File: ${focusFile}`);
+  }
 
   // Launch the server script
   const serverPath = path.resolve(__dirname, '../server/src/index.ts');
@@ -383,6 +389,7 @@ Options:
       ...process.env,
       PORT: String(port),
       WORKSPACE_DIR: targetDir,
+      FOCUS_FILE: focusFile,
     },
     stdio: 'inherit',
   });
@@ -395,6 +402,89 @@ Options:
   child.on('close', (code) => {
     process.exit(code || 0);
   });
+}
+
+function handleRender(argv) {
+  const flags = parseFlags(argv);
+  if (flags.help || flags.h) {
+    console.log(`
+Usage: visual-ui render [options]
+
+Injects and renders a component directly into the active Visual UI canvas.
+
+Options:
+  --file <path>      Target component file path
+  --code <string>    Direct component code
+  --name <string>    Component name
+  --props <json>     Custom props JSON string
+  --port <number>    Server port (default: 3838)
+  -h, --help         Show this help message
+`);
+    process.exit(0);
+  }
+
+  const port = flags.port || process.env.PORT || 3838;
+  const filePath = flags.file ? path.resolve(flags.file) : undefined;
+  const code = flags.code || undefined;
+  const componentName = flags.name || undefined;
+  let props = undefined;
+  if (flags.props) {
+    try {
+      props = JSON.parse(flags.props);
+    } catch {
+      console.warn('Warning: Failed to parse --props as JSON');
+    }
+  }
+
+  if (!filePath && !code) {
+    console.error('Error: Either --file or --code must be provided.');
+    process.exit(1);
+  }
+
+  const payload = JSON.stringify({ filePath, code, componentName, props });
+  const http = require('http');
+  const req = http.request(
+    {
+      hostname: 'localhost',
+      port,
+      path: '/api/canvas/render',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(payload),
+      },
+    },
+    (res) => {
+      let body = '';
+      res.on('data', (chunk) => (body += chunk));
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(body);
+          if (res.statusCode >= 200 && res.statusCode < 300 && json.success) {
+            console.log(`✓ Active canvas updated: <${json.activeComponent.name}>`);
+            if (json.synthesizedProps && Object.keys(json.synthesizedProps).length > 0) {
+              console.log(`  Synthesized props: ${Object.keys(json.synthesizedProps).join(', ')}`);
+            }
+            process.exit(0);
+          } else {
+            console.error(`Render failed (${res.statusCode}): ${json.error || body}`);
+            process.exit(1);
+          }
+        } catch {
+          console.error(`Render failed (${res.statusCode}): ${body}`);
+          process.exit(1);
+        }
+      });
+    }
+  );
+
+  req.on('error', (err) => {
+    console.error(`Failed to connect to server on port ${port}: ${err.message}`);
+    process.exit(1);
+  });
+
+  req.write(payload);
+  req.end();
 }
 
 async function handleModify(argv) {
@@ -484,6 +574,9 @@ switch (command) {
     break;
   case 'modify':
     handleModify(args.slice(1));
+    break;
+  case 'render':
+    handleRender(args.slice(1));
     break;
   default:
     console.error(`Error: Unknown command "${command}". Run "visual-ui --help" for available commands.`);

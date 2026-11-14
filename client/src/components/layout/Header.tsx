@@ -7,8 +7,6 @@ import {
   Crop,
   FolderGit2,
   Cpu,
-  RefreshCw,
-  HelpCircle,
   MousePointer,
 } from 'lucide-react';
 import { PlatformType } from '../../types';
@@ -20,10 +18,6 @@ interface HeaderProps {
   onToggleSnipMode: () => void;
   onToggleSelectMode?: () => void;
   workspacePath: string;
-  onOpenWorkspaceModal: () => void;
-  onOpenAdbModal: () => void;
-  onOpenWebModal: () => void;
-  onCaptureScreen?: () => void;
   aiProviderName: string;
 }
 
@@ -34,10 +28,6 @@ export const Header: React.FC<HeaderProps> = ({
   onToggleSnipMode,
   onToggleSelectMode,
   workspacePath,
-  onOpenWorkspaceModal,
-  onOpenAdbModal,
-  onOpenWebModal,
-  onCaptureScreen,
   aiProviderName,
 }) => {
   return (
@@ -145,50 +135,16 @@ export const Header: React.FC<HeaderProps> = ({
           <span>{isSnipMode ? 'Click & Drag to Snip...' : 'Snip Element'}</span>
         </button>
 
-        {platform === 'mobile' && (
-          <button
-            onClick={onOpenAdbModal}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-studio-800 hover:bg-studio-700 text-studio-200 border border-studio-700 rounded-lg text-xs font-medium transition-all"
-            title="Inspect ADB Devices"
+        {/* Workspace Path Badge if available */}
+        {workspacePath && (
+          <div
+            className="flex items-center gap-1.5 px-2.5 py-1 bg-studio-800/60 border border-studio-700/60 rounded-lg text-xs text-studio-300"
+            title={`Workspace: ${workspacePath}`}
           >
-            <Smartphone className="w-3.5 h-3.5 text-emerald-400" />
-            <span>ADB Devices</span>
-          </button>
+            <FolderGit2 className="w-3.5 h-3.5 text-indigo-400" />
+            <span className="max-w-[120px] truncate">{workspacePath.split('/').pop()}</span>
+          </div>
         )}
-
-        {platform === 'web' && (
-          <button
-            onClick={onOpenWebModal}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-studio-800 hover:bg-studio-700 text-studio-200 border border-studio-700 rounded-lg text-xs font-medium transition-all"
-            title="Load custom web URL"
-          >
-            <Globe className="w-3.5 h-3.5 text-cyan-400" />
-            <span>Load URL</span>
-          </button>
-        )}
-
-        {platform === 'desktop' && onCaptureScreen && (
-          <button
-            onClick={onCaptureScreen}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-studio-800 hover:bg-studio-700 text-studio-200 border border-studio-700 rounded-lg text-xs font-medium transition-all"
-            title="Capture real desktop window or screen"
-          >
-            <Monitor className="w-3.5 h-3.5 text-indigo-400" />
-            <span>Capture Window</span>
-          </button>
-        )}
-
-        {/* Workspace Linker Button */}
-        <button
-          onClick={onOpenWorkspaceModal}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-studio-800/80 hover:bg-studio-700 text-studio-200 border border-studio-700 rounded-lg text-xs font-medium transition-all"
-          title="Target Workspace for Code Patching"
-        >
-          <FolderGit2 className="w-3.5 h-3.5 text-indigo-400" />
-          <span className="max-w-[130px] truncate">
-            {workspacePath ? workspacePath.split('/').pop() : 'Link Workspace'}
-          </span>
-        </button>
 
         {/* AI Provider Status */}
         <div className="hidden lg:flex items-center gap-1.5 px-2.5 py-1 bg-studio-950 rounded-lg border border-studio-800 text-[11px] text-studio-400">
