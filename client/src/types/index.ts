@@ -1,4 +1,18 @@
 export type PlatformType = 'web' | 'mobile' | 'desktop' | 'workspace';
+export type DeviceType = 'mobile' | 'tablet' | 'desktop';
+
+export interface WorkspaceInfo {
+  success: boolean;
+  platform: string;
+  sampleWorkspacePath: string;
+  workspaceDir?: string;
+  focusFile?: string;
+  skillMode?: boolean;
+  targetDevice?: DeviceType;
+  targetPlatform?: PlatformType;
+  detectedPlatform?: PlatformType;
+  detectedFramework?: string;
+}
 
 export interface BoundingBox {
   x: number;

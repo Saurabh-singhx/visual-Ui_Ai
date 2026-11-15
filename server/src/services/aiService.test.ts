@@ -259,4 +259,73 @@ export const MultiButton = () => {
     expect(resGlow.modifiedCode).not.toContain('duration-1000');
     expect(resGlow.modifiedCode).not.toContain('hover:shadow-sm');
   });
+
+  it('preserves h1 and h2 heading tags without rewriting to h3', () => {
+    const codeWithH1 = `<div className="card-box p-4 bg-white"><h1 className="title-text text-2xl font-bold">Original Heading</h1><p>Copy</p></div>`;
+    const res = aiService.modifyComponentCode(codeWithH1, 'change title to "Supercharged Title"');
+    expect(res.modifiedCode).toMatch(/<h1[^>]*>Supercharged Title<\/h1>/i);
+    expect(res.modifiedCode).not.toMatch(/<h3/i);
+
+    const codeWithH2 = `<div className="card-box p-4"><h2 className="sub-title">Sub Heading</h2></div>`;
+    const resH2 = aiService.modifyComponentCode(codeWithH2, 'update heading to "New Subtitle"');
+    expect(resH2.modifiedCode).toMatch(/<h2[^>]*>New Subtitle<\/h2>/i);
+    expect(resH2.modifiedCode).not.toMatch(/<h3/i);
+  });
+
+  it('targets specific element without indiscriminately modifying only the first className', () => {
+    const code = `<div className="card-box p-4 bg-white shadow rounded">
+      <h1 className="title-text text-2xl font-bold">Original Heading</h1>
+      <button id="submit-btn" className="btn-primary bg-indigo-600 text-white px-4 py-2">Submit Action</button>
+    </div>`;
+
+    // Target button label
+    const resBtn = aiService.modifyComponentCode(code, 'update button to "Confirm Action"');
+    expect(resBtn.modifiedCode).toContain('Confirm Action');
+    expect(resBtn.modifiedCode).toContain('card-box p-4 bg-white shadow rounded');
+
+    // Target button styling by elementId
+    const resBtnId = aiService.modifyComponentCode(code, 'Make button red rounded-full', 'button-3');
+    expect(resBtnId.modifiedCode).toContain('card-box p-4 bg-white shadow rounded');
+    expect(resBtnId.modifiedCode).toContain('btn-primary');
+    expect(resBtnId.modifiedCode).toMatch(/bg-rose-600|rounded-full/);
+  });
+
+  it('defaults targetFramework to react-native when originalCode contains React Native elements', async () => {
+    const rnCode = `import React from 'react';
+import { View, Text } from 'react-native';
+export const MobileCard = () => (
+  <View style={{ padding: 16 }}>
+    <Text>Mobile Text</Text>
+  </View>
+);`;
+    const res = await aiService.redesignComponent({
+      prompt: 'Make card compact and modern',
+      originalCode: rnCode,
+    });
+    expect(res.framework).toBe('react-native');
+  });
+
+  it('defaults targetFramework to vue when originalCode contains Vue template', async () => {
+    const vueCode = `<template>
+  <div class="p-4 bg-white">
+    <h1>Vue Title</h1>
+  </div>
+</template>`;
+    const res = await aiService.redesignComponent({
+      prompt: 'Make it clean and dark',
+      originalCode: vueCode,
+    });
+    expect(res.framework).toBe('vue');
+  });
+
+  it('defaults targetFramework to react-tailwind for standard React code', async () => {
+    const reactCode = `export const WebButton = () => (
+  <button className="px-4 py-2 bg-blue-500 text-white">Click</button>
+);`;
+    const res = await aiService.redesignComponent({
+      prompt: 'Make button red',
+      originalCode: reactCode,
+    });
+    expect(res.framework).toBe('react-tailwind');
+  });
 });

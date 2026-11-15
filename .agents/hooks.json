@@ -1,0 +1,10 @@
+{
+  "enabled": true,
+  "Stop": [
+    {
+      "type": "command",
+      "command": "node scripts/stop-gate.js",
+      "timeout": 300
+    }
+  ]
+}

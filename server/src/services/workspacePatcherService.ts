@@ -1,5 +1,7 @@
 import fs from 'fs';
 import path from 'path';
+// @ts-ignore
+import picomatch from 'picomatch';
 import {
   WorkspaceFile,
   WorkspaceSearchResult,
@@ -15,6 +17,7 @@ import {
   ModifyComponentResult,
   RollbackComponentResult,
   PlatformType,
+  ProjectContext,
 } from '../types';
 import { aiService } from './aiService';
 
@@ -32,6 +35,10 @@ export class WorkspacePatcherService {
     '.idea',
     '$recycle.bin',
     'system volume information',
+    'test',
+    'tests',
+    '__tests__',
+    'deprecated',
   ]);
 
   /**
@@ -68,6 +75,46 @@ export class WorkspacePatcherService {
       }
     }
     return candidates[0];
+  }
+
+  /**
+   * Sandboxes file paths within the workspace directory.
+   * Throws an error with status 403 if directory traversal outside WORKSPACE_DIR is attempted.
+   */
+  assertWithinWorkspace(filePath: string, customWorkspace?: string): string {
+    if (!filePath || typeof filePath !== 'string') {
+      const err: any = new Error('filePath is required');
+      err.status = 400;
+      throw err;
+    }
+
+    const rawWorkspace = customWorkspace || process.env.WORKSPACE_DIR;
+    if (!rawWorkspace) {
+      // If no WORKSPACE_DIR configured, still block directory traversal attempts like ../..
+      const normalized = path.normalize(filePath);
+      if (normalized.startsWith('..') || filePath.includes('..')) {
+        const err: any = new Error(`Access denied: Directory traversal detected in path: ${filePath}`);
+        err.status = 403;
+        err.code = 'EACCES';
+        throw err;
+      }
+      return this.normalizePath(filePath);
+    }
+
+    const baseDir = path.resolve(rawWorkspace);
+    const resolvedPath = path.isAbsolute(filePath)
+      ? this.normalizePath(filePath)
+      : path.resolve(baseDir, filePath);
+
+    const relative = path.relative(baseDir, resolvedPath);
+    if (relative.startsWith('..') || path.isAbsolute(relative)) {
+      const err: any = new Error(`Access denied: Path "${filePath}" is outside workspace directory "${baseDir}"`);
+      err.status = 403;
+      err.code = 'EACCES';
+      throw err;
+    }
+
+    return resolvedPath;
   }
 
   /**
@@ -160,9 +207,10 @@ export class WorkspacePatcherService {
     const baseName = path.basename(normRel);
     const lowerBase = baseName.toLowerCase();
 
-    // 1. Tests: __tests__ dir, *.test.*, *.spec.*, test.*, spec.*
+    // 1. Tests: __tests__ dir, test/ dir (singular), tests/ dir, *.test.*, *.spec.*, test.*, spec.*
     if (
-      /(?:^|\/)__tests__(?:\/|$)/i.test(normRel) ||
+      /(?:^|\/)(?:__tests__|tests?)(?:\/|$)/i.test(normRel) ||
+      /(?:^|\/)[^/]+\.(?:test|spec)\.[^/]+$/i.test(normRel) ||
       lowerBase.includes('.test.') ||
       lowerBase.includes('.spec.') ||
       lowerBase.startsWith('test.') ||
@@ -211,6 +259,14 @@ export class WorkspacePatcherService {
       lowerBase.includes('utils.') ||
       lowerBase.startsWith('helper-') ||
       lowerBase.startsWith('util-')
+    ) {
+      return true;
+    }
+
+    // 6. Deprecated directories and modules: **/deprecated/**
+    if (
+      /(?:^|\/)deprecated(?:\/|$)/i.test(normRel) ||
+      lowerBase.includes('deprecated')
     ) {
       return true;
     }
@@ -327,6 +383,233 @@ export class WorkspacePatcherService {
   }
 
   /**
+   * Detects project platform, framework, target device, and viewport from root descriptor files
+   * (package.json, pubspec.yaml, tauri.conf.json, app.json) or component distribution.
+   */
+  detectWorkspaceProjectContext(dirPath: string): ProjectContext {
+    const defaultContext: ProjectContext = {
+      detectedPlatform: 'web',
+      detectedFramework: 'react',
+      targetDevice: 'desktop',
+      viewport: { width: 1200, height: 800 },
+    };
+
+    if (!dirPath) return defaultContext;
+
+    const resolvedDir = this.normalizePath(dirPath);
+    if (!fs.existsSync(resolvedDir)) {
+      return defaultContext;
+    }
+
+    try {
+      const stat = fs.statSync(resolvedDir);
+      if (!stat.isDirectory()) {
+        return defaultContext;
+      }
+    } catch {
+      return defaultContext;
+    }
+
+    // 1. Check package.json
+    const pkgPath = path.join(resolvedDir, 'package.json');
+    let pkgDeps: Record<string, string> | null = null;
+    if (fs.existsSync(pkgPath)) {
+      try {
+        const raw = fs.readFileSync(pkgPath, 'utf8');
+        const parsed = JSON.parse(raw);
+        const deps: Record<string, string> = {
+          ...(parsed.dependencies || {}),
+          ...(parsed.devDependencies || {}),
+          ...(parsed.peerDependencies || {}),
+        };
+        pkgDeps = deps;
+
+        // Priority A: Mobile in package.json (react-native, expo)
+        if (deps['react-native'] || deps['expo']) {
+          return {
+            detectedPlatform: 'mobile',
+            detectedFramework: 'react-native',
+            targetDevice: 'mobile',
+            viewport: { width: 375, height: 667 },
+          };
+        }
+
+        // Priority B: Desktop in package.json (electron, @tauri-apps/api, @tauri-apps/cli)
+        if (deps['electron']) {
+          return {
+            detectedPlatform: 'desktop',
+            detectedFramework: 'electron',
+            targetDevice: 'desktop',
+            viewport: { width: 1200, height: 800 },
+          };
+        }
+
+        if (deps['@tauri-apps/api'] || deps['@tauri-apps/cli']) {
+          return {
+            detectedPlatform: 'desktop',
+            detectedFramework: 'tauri',
+            targetDevice: 'desktop',
+            viewport: { width: 1200, height: 800 },
+          };
+        }
+      } catch {
+        // Corrupted or unparseable package.json, proceed to other checks
+      }
+    }
+
+    // 2. Check Flutter pubspec.yaml
+    const pubspecPath = path.join(resolvedDir, 'pubspec.yaml');
+    if (fs.existsSync(pubspecPath)) {
+      return {
+        detectedPlatform: 'mobile',
+        detectedFramework: 'flutter',
+        targetDevice: 'mobile',
+        viewport: { width: 375, height: 667 },
+      };
+    }
+
+    // 3. Check Tauri configs or src-tauri
+    const tauriConf = path.join(resolvedDir, 'tauri.conf.json');
+    const srcTauri = path.join(resolvedDir, 'src-tauri');
+    if (fs.existsSync(tauriConf) || fs.existsSync(srcTauri)) {
+      return {
+        detectedPlatform: 'desktop',
+        detectedFramework: 'tauri',
+        targetDevice: 'desktop',
+        viewport: { width: 1200, height: 800 },
+      };
+    }
+
+    // 4. Check app.json (e.g. Expo mobile projects)
+    const appJsonPath = path.join(resolvedDir, 'app.json');
+    if (fs.existsSync(appJsonPath)) {
+      try {
+        const appRaw = fs.readFileSync(appJsonPath, 'utf8');
+        if (appRaw.toLowerCase().includes('expo')) {
+          return {
+            detectedPlatform: 'mobile',
+            detectedFramework: 'react-native',
+            targetDevice: 'mobile',
+            viewport: { width: 375, height: 667 },
+          };
+        }
+      } catch {}
+    }
+
+    // 5. Check Web frameworks in package.json
+    if (pkgDeps) {
+      if (pkgDeps['next']) {
+        return {
+          detectedPlatform: 'web',
+          detectedFramework: 'nextjs',
+          targetDevice: 'desktop',
+          viewport: { width: 1200, height: 800 },
+        };
+      }
+
+      if (pkgDeps['vue'] || pkgDeps['@vue/runtime-core'] || pkgDeps['nuxt']) {
+        return {
+          detectedPlatform: 'web',
+          detectedFramework: 'vue',
+          targetDevice: 'desktop',
+          viewport: { width: 1200, height: 800 },
+        };
+      }
+
+      if (pkgDeps['svelte']) {
+        return {
+          detectedPlatform: 'web',
+          detectedFramework: 'svelte',
+          targetDevice: 'desktop',
+          viewport: { width: 1200, height: 800 },
+        };
+      }
+
+      if (pkgDeps['react']) {
+        return {
+          detectedPlatform: 'web',
+          detectedFramework: 'react',
+          targetDevice: 'desktop',
+          viewport: { width: 1200, height: 800 },
+        };
+      }
+    }
+
+    // 6. Component distribution scan if root descriptor files do not match or are absent
+    try {
+      const counts: Record<PlatformType, number> = { web: 0, mobile: 0, desktop: 0 };
+      const scanDirSync = (dir: string, depth = 0) => {
+        if (depth > 4) return;
+        let entries: fs.Dirent[] = [];
+        try {
+          entries = fs.readdirSync(dir, { withFileTypes: true });
+        } catch {
+          return;
+        }
+
+        for (const entry of entries) {
+          const fullPath = path.join(dir, entry.name);
+          if (entry.isDirectory()) {
+            if (!this.ignoredDirs.has(entry.name.toLowerCase())) {
+              scanDirSync(fullPath, depth + 1);
+            }
+          } else if (entry.isFile()) {
+            const ext = path.extname(entry.name).toLowerCase();
+            if (this.allowedExtensions.has(ext) || ext === '.dart' || ext === '.xml') {
+              const rel = path.relative(resolvedDir, fullPath);
+              let chunk = '';
+              try {
+                const fd = fs.openSync(fullPath, 'r');
+                const buf = Buffer.alloc(2048);
+                const bytesRead = fs.readSync(fd, buf, 0, 2048, 0);
+                fs.closeSync(fd);
+                chunk = buf.toString('utf8', 0, bytesRead);
+              } catch {}
+
+              const classified = this.classifyPlatform(fullPath, rel, chunk);
+              if (classified) {
+                counts[classified.platform]++;
+              }
+            }
+          }
+        }
+      };
+
+      scanDirSync(resolvedDir);
+
+      if (counts.mobile > counts.desktop && counts.mobile > counts.web) {
+        return {
+          detectedPlatform: 'mobile',
+          detectedFramework: 'react-native',
+          targetDevice: 'mobile',
+          viewport: { width: 375, height: 667 },
+        };
+      }
+
+      if (counts.desktop > counts.mobile && counts.desktop > counts.web) {
+        return {
+          detectedPlatform: 'desktop',
+          detectedFramework: 'electron',
+          targetDevice: 'desktop',
+          viewport: { width: 1200, height: 800 },
+        };
+      }
+
+      if (counts.web > 0) {
+        return {
+          detectedPlatform: 'web',
+          detectedFramework: 'react',
+          targetDevice: 'desktop',
+          viewport: { width: 1200, height: 800 },
+        };
+      }
+    } catch {}
+
+    // 7. Fallback default
+    return defaultContext;
+  }
+
+  /**
    * Shallow metadata scanner without loading full file bodies into memory
    */
   async scanProjectMetadata(
@@ -382,7 +665,7 @@ export class WorkspacePatcherService {
     }
 
     const allowedCandidateExts = new Set(['.tsx', '.jsx', '.vue', '.svelte', '.html', '.dart', '.xml', '.ts', '.js']);
-    const ignoredDirRegex = /(?:^|\/)(?:node_modules|\.git|dist|build|\.next|\.cache|coverage|\.vs|\.idea|\.svelte-kit|\.nuxt|out|\$recycle\.bin)(?:\/|$)/i;
+    const ignoredDirRegex = /(?:^|\/)(?:node_modules|\.git|dist|build|\.next|\.cache|coverage|\.vs|\.idea|\.svelte-kit|\.nuxt|out|\$recycle\.bin|tests?|__tests__|deprecated)(?:\/|$)/i;
 
     const components: ComponentMetadata[] = [];
 
@@ -446,13 +729,13 @@ export class WorkspacePatcherService {
 
     if (options.include && options.include.length > 0) {
       filtered = filtered.filter((c) =>
-        options.include!.some((inc) => c.relativePath.includes(inc) || c.name.includes(inc))
+        options.include!.some((inc) => this.matchesPattern(inc, c.relativePath, c.name))
       );
     }
 
     if (options.exclude && options.exclude.length > 0) {
       filtered = filtered.filter(
-        (c) => !options.exclude!.some((exc) => c.relativePath.includes(exc) || c.name.includes(exc))
+        (c) => !options.exclude!.some((exc) => this.matchesPattern(exc, c.relativePath, c.name))
       );
     }
 
@@ -472,20 +755,84 @@ export class WorkspacePatcherService {
           .map(([folder]) => folder)
       : undefined;
 
+    const projectContext = this.detectWorkspaceProjectContext(baseDir);
+
     return {
       components: filtered,
       totalCount: filtered.length,
       exceedsThreshold,
       folderBreakdown,
       suggestedFocus,
+      detectedPlatform: projectContext.detectedPlatform,
+      detectedFramework: projectContext.detectedFramework,
+      targetDevice: projectContext.targetDevice,
+      viewport: projectContext.viewport,
     };
+  }
+
+  /**
+   * Evaluates pattern matching using proper glob syntax (supporting **\/*.test.*, **\/deprecated\/**, etc.)
+   * and directory boundary matching (e.g. test/).
+   */
+  matchesPattern(pattern: string, relativePath: string, name: string): boolean {
+    if (!pattern) return false;
+    const norm = relativePath.replace(/\\/g, '/').replace(/^\/+/, '');
+    const pat = pattern.replace(/\\/g, '/');
+
+    // Directory exclusion like test/ or foo/
+    if (pat.endsWith('/')) {
+      const dir = pat.slice(0, -1);
+      if (norm.startsWith(pat) || norm.includes('/' + pat) || norm === dir) {
+        return true;
+      }
+      try {
+        if (picomatch(`**/${dir}/**`, { dot: true })(norm)) return true;
+      } catch {}
+      return false;
+    }
+
+    // Direct glob matching
+    try {
+      if (picomatch(pat, { dot: true })(norm)) return true;
+    } catch {}
+
+    const hasGlobChars = /[*?\[\]{}!]/.test(pat);
+
+    // Prefix with **/ to support partial glob matching
+    if (!pat.startsWith('**/')) {
+      try {
+        if (picomatch(`**/${pat}`, { dot: true })(norm)) return true;
+      } catch {}
+      try {
+        if (picomatch(`**/${pat}/**`, { dot: true })(norm)) return true;
+      } catch {}
+    }
+
+    if (hasGlobChars) {
+      return false;
+    }
+
+    // Name equality
+    if (
+      name.toLowerCase() === pat.toLowerCase() ||
+      path.basename(norm).toLowerCase() === pat.toLowerCase()
+    ) {
+      return true;
+    }
+
+    // Substring fallback for non-glob string tokens (e.g. 'Button', 'Modal')
+    if (norm.includes(pat) || name.includes(pat)) {
+      return true;
+    }
+
+    return false;
   }
 
   /**
    * On-demand lazy load component details and element hierarchy
    */
   async getComponentDetails(filePath: string): Promise<ComponentDetailsResult> {
-    const resolvedPath = this.normalizePath(filePath);
+    const resolvedPath = this.assertWithinWorkspace(filePath);
     if (!fs.existsSync(resolvedPath)) {
       throw new Error(`Target file not found: ${filePath}`);
     }
@@ -624,7 +971,19 @@ export class WorkspacePatcherService {
     prompt: string,
     elementId?: string
   ): Promise<ModifyComponentResult> {
-    const resolvedPath = this.normalizePath(filePath);
+    let resolvedPath: string;
+    try {
+      resolvedPath = this.assertWithinWorkspace(filePath);
+    } catch (err: any) {
+      return {
+        success: false,
+        filePath,
+        modifiedCode: '',
+        appliedChanges: [],
+        error: err.message,
+      };
+    }
+
     if (!fs.existsSync(resolvedPath)) {
       return {
         success: false,
@@ -664,7 +1023,22 @@ export class WorkspacePatcherService {
     filePath: string,
     specificBackupPath?: string
   ): Promise<RollbackComponentResult> {
-    const resolvedTarget = this.normalizePath(filePath);
+    let resolvedTarget: string;
+    try {
+      resolvedTarget = this.assertWithinWorkspace(filePath);
+      if (specificBackupPath) {
+        this.assertWithinWorkspace(specificBackupPath);
+      }
+    } catch (err: any) {
+      return {
+        success: false,
+        restoredFrom: '',
+        currentCode: '',
+        error: err.message,
+        message: err.message,
+      };
+    }
+
     if (!fs.existsSync(resolvedTarget)) {
       return {
         success: false,
@@ -1221,11 +1595,16 @@ export class WorkspacePatcherService {
 
     const totalHeight = Math.max(750, footers.length > 0 ? footerY + 40 : contentEndY + 60);
 
+    const projectContext = this.detectWorkspaceProjectContext(resolvedPath);
+
     return {
       id: `workspace-${folderName.toLowerCase().replace(/[^a-z0-9_-]/g, '-')}`,
-      platform: 'web',
+      platform: projectContext.detectedPlatform,
       name: `Workspace: ${folderName}`,
-      viewport: { width: 1200, height: totalHeight },
+      viewport: {
+        width: projectContext.viewport.width,
+        height: Math.max(projectContext.viewport.height, totalHeight || 750),
+      },
       description: `Loaded ${interactiveElements.length} component${interactiveElements.length === 1 ? '' : 's'} from ${resolvedPath}`,
       interactiveElements,
       isWorkspace: true,

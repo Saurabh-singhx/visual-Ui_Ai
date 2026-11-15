@@ -9,9 +9,11 @@ import {
   Sparkles,
   Code2,
   FileCode,
+  Cpu,
 } from 'lucide-react';
 import { InteractiveElement } from '../../types';
 import { calculateContrast, auditTouchTarget } from '../../utils/wcagUtils';
+import { api } from '../../services/api';
 
 interface ElementInspectorProps {
   element: InteractiveElement | null;
@@ -29,6 +31,9 @@ export const ElementInspector: React.FC<ElementInspectorProps> = ({
   onOpenCodeEditor,
 }) => {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [bridgeStatus, setBridgeStatus] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
+  const [bridgeMsg, setBridgeMsg] = useState<string | null>(null);
+  const [bridgeInstruction, setBridgeInstruction] = useState<string>('');
 
   if (!element) {
     return (
@@ -55,13 +60,40 @@ export const ElementInspector: React.FC<ElementInspectorProps> = ({
     setTimeout(() => setCopiedKey(null), 1500);
   };
 
+  const handleBridgeSend = async () => {
+    if (!element || !bridgeInstruction.trim()) return;
+    setBridgeStatus('sending');
+    setBridgeMsg(null);
+    try {
+      await api.bridgeSelect({
+        element: {
+          selector: element.selector,
+          tagName: element.tagName,
+          componentHint: element.name,
+          filePath: element.filePath,
+          outerHTMLSnippet: element.codeSnippet?.slice(0, 300),
+        },
+        instruction: bridgeInstruction,
+        status: 'pending',
+      });
+      setBridgeStatus('sent');
+      setBridgeMsg('Queued for CLI agent ✓');
+      setBridgeInstruction('');
+      setTimeout(() => { setBridgeStatus('idle'); setBridgeMsg(null); }, 3000);
+    } catch {
+      setBridgeStatus('error');
+      setBridgeMsg('Bridge unavailable — is the server running?');
+      setTimeout(() => { setBridgeStatus('idle'); setBridgeMsg(null); }, 4000);
+    }
+  };
+
   return (
     <div className="h-full flex flex-col bg-studio-900/60 overflow-y-auto overflow-x-hidden select-none divide-y divide-studio-800/80 text-xs">
       {/* Header Info */}
       <div className="p-4">
         <div className="flex items-center justify-between">
           <span className="font-semibold text-white truncate text-sm">{element.name}</span>
-          <span className="px-2 py-0.5 rounded font-mono text-[10px] bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+          <span className="px-2 py-0.5 rounded font-mono text-[10px] bg-orange-500/10 text-orange-400 border border-orange-500/20">
             &lt;{element.tagName}&gt;
           </span>
         </div>
@@ -141,7 +173,7 @@ export const ElementInspector: React.FC<ElementInspectorProps> = ({
         {(contrast.score !== 'AAA' || !touchAudit.compliant) && (
           <button
             onClick={onFixAccessibility}
-            className="w-full mt-3 flex items-center justify-center gap-1.5 py-1.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white rounded-lg text-xs font-semibold shadow transition-all"
+            className="w-full mt-3 flex items-center justify-center gap-1.5 py-1.5 bg-gradient-to-r from-orange-600 to-orange-500 hover:from-orange-500 hover:to-orange-400 text-white rounded-lg text-xs font-semibold shadow transition-all"
           >
             <Sparkles className="w-3.5 h-3.5" />
             <span>AI: Fix Accessibility & Contrast</span>
@@ -213,7 +245,7 @@ export const ElementInspector: React.FC<ElementInspectorProps> = ({
                   )}
                 </button>
               </div>
-              <p className="font-mono text-[10px] text-indigo-300 break-words leading-relaxed">
+              <p className="font-mono text-[10px] text-orange-300 break-words leading-relaxed">
                 {element.className}
               </p>
             </div>
@@ -225,7 +257,7 @@ export const ElementInspector: React.FC<ElementInspectorProps> = ({
       <div className="p-4">
         <div className="flex items-center justify-between mb-2">
           <span className="font-semibold text-studio-200 flex items-center gap-1">
-            <FileCode className="w-3.5 h-3.5 text-indigo-400" />
+            <FileCode className="w-3.5 h-3.5 text-orange-400" />
             <span>Workspace Code Match</span>
           </span>
           {matchedFilePath && (
@@ -250,7 +282,7 @@ export const ElementInspector: React.FC<ElementInspectorProps> = ({
         <div className="p-4">
           <div className="flex items-center justify-between mb-2">
             <span className="font-semibold text-studio-200 flex items-center gap-1.5">
-              <Code2 className="w-3.5 h-3.5 text-indigo-400" />
+              <Code2 className="w-3.5 h-3.5 text-orange-400" />
               <span>Component Code</span>
               {matchedFilePath && (
                 <span className="text-[9px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-1 py-0.5 rounded font-mono">
@@ -263,7 +295,7 @@ export const ElementInspector: React.FC<ElementInspectorProps> = ({
                 <button
                   type="button"
                   onClick={onOpenCodeEditor}
-                  className="flex items-center gap-1 px-2 py-0.5 bg-indigo-600/30 hover:bg-indigo-600 text-indigo-300 hover:text-white rounded text-[11px] font-sans transition-colors border border-indigo-500/40"
+                  className="flex items-center gap-1 px-2 py-0.5 bg-orange-600/30 hover:bg-orange-600 text-orange-300 hover:text-white rounded text-[11px] font-sans transition-colors border border-orange-500/40"
                   title="Open direct manual code editor"
                 >
                   <Code2 className="w-3 h-3" />
@@ -290,6 +322,41 @@ export const ElementInspector: React.FC<ElementInspectorProps> = ({
           </div>
         </div>
       )}
+
+      {/* CLI Agent Bridge */}
+      <div className="p-4 border-t border-studio-800/60">
+        <div className="flex items-center gap-1.5 mb-2">
+          <Cpu className="w-3.5 h-3.5 text-orange-400 shrink-0" />
+          <span className="font-semibold text-studio-200 text-xs">CLI Agent Bridge</span>
+          <span className="text-[9px] px-1.5 py-0.5 bg-orange-500/20 text-orange-400 border border-orange-500/30 rounded font-mono uppercase ml-auto">
+            visual-ui listen
+          </span>
+        </div>
+        <input
+          type="text"
+          value={bridgeInstruction}
+          onChange={(e) => setBridgeInstruction(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') handleBridgeSend(); }}
+          placeholder={element ? `Instruction for <${element.tagName}>...` : 'Select an element first...'}
+          disabled={!element}
+          className="w-full bg-studio-950 border border-studio-800 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-studio-500 focus:outline-none focus:ring-1 focus:ring-orange-500 font-sans mb-2"
+        />
+        <button
+          type="button"
+          onClick={handleBridgeSend}
+          disabled={!element || !bridgeInstruction.trim() || bridgeStatus === 'sending'}
+          className="w-full flex items-center justify-center gap-1.5 py-1.5 bg-orange-600/20 hover:bg-orange-600/40 disabled:opacity-40 text-orange-300 border border-orange-500/30 rounded-lg text-xs font-medium transition-colors"
+          title="Queue this change for the CLI agent (visual-ui listen)"
+        >
+          <Cpu className="w-3.5 h-3.5 shrink-0" />
+          <span>Apply via CLI Agent</span>
+        </button>
+        {bridgeMsg && (
+          <p className={`text-[10px] mt-1 ${bridgeStatus === 'error' ? 'text-rose-400' : 'text-orange-400'}`}>
+            {bridgeMsg}
+          </p>
+        )}
+      </div>
     </div>
   );
 };

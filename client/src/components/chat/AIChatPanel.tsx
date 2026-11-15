@@ -9,8 +9,11 @@ import {
   RotateCcw,
   AlertCircle,
   CornerDownLeft,
+  Cpu,
+  StopCircle,
 } from 'lucide-react';
 import { AIChatMessage, InteractiveElement } from '../../types';
+import { api } from '../../services/api';
 
 interface AIChatPanelProps {
   messages: AIChatMessage[];
@@ -32,6 +35,8 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
   const [inputText, setInputText] = useState<string>('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const [bridgeStatus, setBridgeStatus] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
+  const [bridgeMsg, setBridgeMsg] = useState<string | null>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -51,6 +56,47 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
     }
   };
 
+  const handleBridgeApply = async () => {
+    if (!inputText.trim()) return;
+    setBridgeStatus('sending');
+    setBridgeMsg(null);
+    try {
+      await api.bridgeSelect({
+        element: {
+          selector: selectedElement?.selector || 'body',
+          tagName: selectedElement?.tagName,
+          componentHint: selectedElement?.name,
+          filePath: selectedElement?.filePath,
+          outerHTMLSnippet: selectedElement?.codeSnippet?.slice(0, 300),
+        },
+        instruction: inputText,
+        status: 'pending',
+      });
+      setBridgeStatus('sent');
+      setBridgeMsg('Queued for CLI agent ✓');
+      setInputText('');
+      setTimeout(() => { setBridgeStatus('idle'); setBridgeMsg(null); }, 3000);
+    } catch {
+      setBridgeStatus('error');
+      setBridgeMsg('Bridge unavailable — is the server running?');
+      setTimeout(() => { setBridgeStatus('idle'); setBridgeMsg(null); }, 4000);
+    }
+  };
+
+  const handleBridgeDone = async () => {
+    setBridgeStatus('sending');
+    try {
+      await api.bridgeDone();
+      setBridgeStatus('sent');
+      setBridgeMsg('CLI session finished ✓');
+      setTimeout(() => { setBridgeStatus('idle'); setBridgeMsg(null); }, 3000);
+    } catch {
+      setBridgeStatus('error');
+      setBridgeMsg('Bridge unavailable');
+      setTimeout(() => { setBridgeStatus('idle'); setBridgeMsg(null); }, 4000);
+    }
+  };
+
   return (
     <div className="h-full flex flex-col bg-studio-900 border-t lg:border-t-0 lg:border-l border-studio-800 select-none">
       {/* Chat Header */}
@@ -59,7 +105,7 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
           <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
           <span className="font-semibold text-white">AI Redesign Studio</span>
           {selectedElement && (
-            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 truncate max-w-[120px]">
+            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-orange-500/20 text-orange-300 border border-orange-500/30 truncate max-w-[120px]">
               &lt;{selectedElement.tagName}&gt;
             </span>
           )}
@@ -84,7 +130,7 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
             }`}
           >
             {msg.role === 'assistant' && (
-              <div className="w-7 h-7 rounded-lg bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center shrink-0 text-indigo-400">
+              <div className="w-7 h-7 rounded-lg bg-orange-600/20 border border-orange-500/30 flex items-center justify-center shrink-0 text-orange-400">
                 <Bot className="w-4 h-4" />
               </div>
             )}
@@ -92,7 +138,7 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
             <div
               className={`max-w-[85%] rounded-2xl p-3.5 leading-relaxed ${
                 msg.role === 'user'
-                  ? 'bg-indigo-600 text-white shadow-sm'
+                  ? 'bg-orange-600 text-white shadow-sm'
                   : 'bg-studio-950 border border-studio-800 text-studio-200 shadow-md'
               }`}
             >
@@ -119,14 +165,14 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
               {/* Styling Highlights */}
               {msg.stylingDiffSummary && msg.stylingDiffSummary.length > 0 && (
                 <div className="mt-2 pt-2 border-t border-studio-800/80">
-                  <div className="text-[10px] font-semibold text-indigo-400 uppercase tracking-wider mb-1 flex items-center gap-1">
+                  <div className="text-[10px] font-semibold text-orange-400 uppercase tracking-wider mb-1 flex items-center gap-1">
                     <Sliders className="w-3 h-3" />
                     <span>Design Enhancements</span>
                   </div>
                   <ul className="space-y-1 text-[11px] text-studio-300">
                     {msg.stylingDiffSummary.map((item, i) => (
                       <li key={i} className="flex items-start gap-1.5">
-                        <span className="text-indigo-400">•</span>
+                        <span className="text-orange-400">•</span>
                         <span>{item}</span>
                       </li>
                     ))}
@@ -145,7 +191,7 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
 
         {isLoading && (
           <div className="flex gap-3 items-center text-studio-400 text-xs">
-            <div className="w-7 h-7 rounded-lg bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400 animate-spin">
+            <div className="w-7 h-7 rounded-lg bg-orange-600/20 border border-orange-500/30 flex items-center justify-center text-orange-400 animate-spin">
               <Sparkles className="w-4 h-4" />
             </div>
             <div className="bg-studio-950 p-3 rounded-2xl border border-studio-800 flex items-center gap-2">
@@ -164,7 +210,7 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
             key={preset.id}
             onClick={() => onSendMessage(preset.prompt)}
             disabled={isLoading}
-            className="shrink-0 px-2.5 py-1 rounded-full text-[11px] bg-studio-800/70 hover:bg-indigo-600/30 hover:text-indigo-300 text-studio-300 border border-studio-700/60 transition-colors disabled:opacity-50"
+            className="shrink-0 px-2.5 py-1 rounded-full text-[11px] bg-studio-800/70 hover:bg-orange-600/30 hover:text-orange-300 text-studio-300 border border-studio-700/60 transition-colors disabled:opacity-50"
           >
             {preset.label}
           </button>
@@ -185,13 +231,13 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
                 : 'Select an element or type a prompt...'
             }
             rows={2}
-            className="w-full bg-studio-950 border border-studio-800 rounded-xl px-3 py-2 pr-10 text-xs text-white placeholder-studio-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 resize-none font-sans"
+            className="w-full bg-studio-950 border border-studio-800 rounded-xl px-3 py-2 pr-10 text-xs text-white placeholder-studio-500 focus:outline-none focus:ring-1 focus:ring-orange-500 resize-none font-sans"
           />
 
           <button
             type="submit"
             disabled={!inputText.trim() || isLoading}
-            className="absolute right-2.5 bottom-3.5 p-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:bg-studio-800 disabled:text-studio-600 text-white rounded-lg transition-colors"
+            className="absolute right-2.5 bottom-3.5 p-1.5 bg-orange-600 hover:bg-orange-500 disabled:bg-studio-800 disabled:text-studio-600 text-white rounded-lg transition-colors"
             title="Send (Enter)"
           >
             <Send className="w-3.5 h-3.5" />
@@ -201,6 +247,35 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
           <span>Press Enter to send, Shift+Enter for newline</span>
           <span>Powered by Multimodal UI Engine</span>
         </div>
+
+        {/* CLI Bridge Buttons */}
+        <div className="flex items-center gap-2 mt-2 pt-2 border-t border-studio-800/60">
+          <button
+            type="button"
+            onClick={handleBridgeApply}
+            disabled={!inputText.trim() || bridgeStatus === 'sending'}
+            className="flex items-center gap-1.5 flex-1 justify-center px-3 py-1.5 bg-orange-600/20 hover:bg-orange-600/40 disabled:opacity-40 text-orange-300 border border-orange-500/30 rounded-lg text-xs font-medium transition-colors"
+            title="Queue this instruction for the listening CLI agent (visual-ui listen)"
+          >
+            <Cpu className="w-3.5 h-3.5 shrink-0" />
+            <span>Apply via CLI Agent</span>
+          </button>
+          <button
+            type="button"
+            onClick={handleBridgeDone}
+            disabled={bridgeStatus === 'sending'}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 text-zinc-300 border border-zinc-700 rounded-lg text-xs font-medium transition-colors"
+            title="Signal the CLI agent that the visual editing session is finished"
+          >
+            <StopCircle className="w-3.5 h-3.5 shrink-0" />
+            <span>Finish CLI Session</span>
+          </button>
+        </div>
+        {bridgeMsg && (
+          <p className={`text-[10px] mt-1 px-1 ${bridgeStatus === 'error' ? 'text-rose-400' : 'text-orange-400'}`}>
+            {bridgeMsg}
+          </p>
+        )}
       </div>
     </div>
   );

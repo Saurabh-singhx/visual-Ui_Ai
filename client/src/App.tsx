@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Sparkles, Code2 } from 'lucide-react';
+import { Sparkles, Code2, Layout, Sliders } from 'lucide-react';
 import { Header } from './components/layout/Header';
 import { VisualCanvas } from './components/canvas/VisualCanvas';
 import { ElementInspector } from './components/inspector/ElementInspector';
@@ -10,76 +10,62 @@ import { PatchReviewModal } from './components/workspace/PatchReviewModal';
 import { api } from './services/api';
 import {
   PlatformType,
+  WorkspaceInfo,
   SampleApp,
   InteractiveElement,
   BoundingBox,
   AIChatMessage,
 } from './types';
 
-const DEFAULT_APPS: SampleApp[] = [
-  {
-    id: 'web-landing',
-    platform: 'web',
-    name: 'Modern SaaS Landing Page',
-    viewport: { width: 1200, height: 750 },
-    description: 'Web application mockup',
-    interactiveElements: [
-      {
-        id: 'elem-1',
-        name: 'Header Nav',
-        selector: 'header.nav',
-        bounds: { x: 0, y: 0, width: 1200, height: 60 },
-        tagName: 'nav',
-        className: 'bg-white p-4',
-        codeSnippet: '<nav>Header</nav>',
-        styles: { backgroundColor: '#ffffff', textColor: '#000000' },
-      },
-    ],
-  },
-  {
-    id: 'mobile-crypto',
-    platform: 'mobile',
-    name: 'Crypto Portfolio App',
-    viewport: { width: 375, height: 667 },
-    description: 'Mobile application mockup',
-    interactiveElements: [],
-  },
-  {
-    id: 'desktop-admin',
-    platform: 'desktop',
-    name: 'Analytics Desktop Dashboard',
-    viewport: { width: 1280, height: 800 },
-    description: 'Desktop dashboard mockup',
-    interactiveElements: [
-      {
-        id: 'desktop-elem-widget',
-        name: 'Active Server Metric Widget',
-        selector: 'QWidget#metricWidget',
-        bounds: { x: 260, y: 110, width: 320, height: 150 },
-        tagName: 'QWidget',
-        className: 'bg-slate-800 rounded-lg p-4 border border-slate-700',
-        codeSnippet: 'export const MetricWidget = () => <div>CPU: 42.8%</div>;',
-        styles: { backgroundColor: '#1e293b', textColor: '#34d399' },
-      },
-      {
-        id: 'desktop-elem-sidebar',
-        name: 'Left Sidebar Navigation',
-        selector: 'aside.sidebar',
-        bounds: { x: 24, y: 60, width: 210, height: 710 },
-        tagName: 'aside',
-        className: 'bg-slate-900/60 p-3',
-        codeSnippet: 'export const DesktopSidebar = () => <aside>Dashboard</aside>;',
-        styles: { backgroundColor: '#0f172a', textColor: '#94a3b8' },
-      },
-    ],
-  },
-];
-
 export const App: React.FC = () => {
-  const [platform, setPlatform] = useState<PlatformType>('web');
-  const [apps, setApps] = useState<SampleApp[]>(DEFAULT_APPS);
-  const [currentApp, setCurrentApp] = useState<SampleApp | null>(DEFAULT_APPS[0]);
-  const [selectedElement, setSelectedElement] = useState<InteractiveElement | null>(DEFAULT_APPS[0].interactiveElements[0] || null);
+  // Skill Mode & Target Device / Platform
+  const [isSkillMode, setIsSkillMode] = useState<boolean>(() => {
+    if (typeof window !== 'undefined' && window.location?.search) {
+      const p = new URLSearchParams(window.location.search);
+      return p.get('mode') === 'skill' || p.get('skill') === 'true' || p.has('skill');
+    }
+    return false;
+  });
+
+  const [targetDevice, setTargetDevice] = useState<'mobile' | 'tablet' | 'desktop' | null>(() => {
+    if (typeof window !== 'undefined' && window.location?.search) {
+      const p = new URLSearchParams(window.location.search);
+      const d = p.get('device');
+      if (d === 'mobile' || d === 'tablet' || d === 'desktop') return d;
+      const plat = p.get('platform');
+      if (plat === 'mobile') return 'mobile';
+      if (plat === 'desktop') return 'desktop';
+    }
+    return null;
+  });
+
+  const [targetPlatform, setTargetPlatform] = useState<PlatformType | null>(() => {
+    if (typeof window !== 'undefined' && window.location?.search) {
+      const p = new URLSearchParams(window.location.search);
+      const plat = p.get('platform') as PlatformType | null;
+      if (plat && ['web', 'mobile', 'desktop', 'workspace'].includes(plat)) return plat;
+      const d = p.get('device');
+      if (d === 'mobile') return 'mobile';
+      if (d === 'desktop') return 'desktop';
+    }
+    return null;
+  });
+
+  const [platform, setPlatform] = useState<PlatformType>(() => {
+    if (typeof window !== 'undefined' && window.location?.search) {
+      const p = new URLSearchParams(window.location.search);
+      const plat = p.get('platform') as PlatformType | null;
+      if (plat && ['web', 'mobile', 'desktop', 'workspace'].includes(plat)) return plat;
+      const d = p.get('device');
+      if (d === 'mobile') return 'mobile';
+      if (d === 'desktop') return 'desktop';
+    }
+    return 'web';
+  });
+
+  const [apps, setApps] = useState<SampleApp[]>([]);
+  const [currentApp, setCurrentApp] = useState<SampleApp | null>(null);
+  const [selectedElement, setSelectedElement] = useState<InteractiveElement | null>(null);
   const [isSnipMode, setIsSnipMode] = useState<boolean>(false);
 
   // Chat & AI
@@ -94,10 +80,12 @@ export const App: React.FC = () => {
   const [workspaceApp, setWorkspaceApp] = useState<SampleApp | null>(null);
   const [matchedFilePath, setMatchedFilePath] = useState<string>('');
   const [matchedFileContent, setMatchedFileContent] = useState<string>('');
+  const totalComponentsCount = apps.length;
 
   // Modals
   const [isPatchReviewOpen, setIsPatchReviewOpen] = useState<boolean>(false);
   const [rightPanelTab, setRightPanelTab] = useState<'ai' | 'editor'>('ai');
+  const [mobileActivePanel, setMobileActivePanel] = useState<'canvas' | 'inspector' | 'chat'>('canvas');
 
   // Initial load
   useEffect(() => {
@@ -105,17 +93,81 @@ export const App: React.FC = () => {
   }, []);
 
   // Update current app when platform changes
+  const handlePlatformChange = (newPlatform: PlatformType) => {
+    setPlatform(newPlatform);
+
+    // If an app matching newPlatform already exists in apps, switch to it
+    const match = apps.find((a) => a.platform === newPlatform);
+    if (match) {
+      setCurrentApp(match);
+      if ((match.interactiveElements?.length ?? 0) > 0) {
+        const first = match.interactiveElements[0];
+        setSelectedElement(first);
+        if (first.filePath) {
+          setMatchedFilePath(first.filePath);
+          setMatchedFileContent(first.codeSnippet || '');
+        }
+      } else {
+        setSelectedElement(null);
+      }
+      return;
+    }
+
+    // Otherwise adapt active workspace application to selected platform & viewport preset
+    if (workspaceApp || currentApp) {
+      const baseApp = workspaceApp || currentApp!;
+      const viewportMap: Record<PlatformType, { width: number; height: number }> = {
+        mobile: { width: 375, height: 667 },
+        desktop: { width: 1280, height: 800 },
+        web: { width: 1200, height: 750 },
+        workspace: baseApp.viewport || { width: 1200, height: 750 },
+      };
+
+      const adaptedApp: SampleApp = {
+        ...baseApp,
+        platform: newPlatform,
+        viewport: viewportMap[newPlatform] || baseApp.viewport || { width: 1200, height: 750 },
+      };
+
+      setCurrentApp(adaptedApp);
+      setApps((prev) => {
+        const existingIdx = prev.findIndex((a) => a.id === adaptedApp.id);
+        if (existingIdx >= 0) {
+          const updated = [...prev];
+          updated[existingIdx] = adaptedApp;
+          return updated;
+        }
+        return [...prev, adaptedApp];
+      });
+
+      if ((adaptedApp.interactiveElements?.length ?? 0) > 0) {
+        const first = adaptedApp.interactiveElements[0];
+        setSelectedElement(first);
+        if (first.filePath) {
+          setMatchedFilePath(first.filePath);
+          setMatchedFileContent(first.codeSnippet || '');
+        }
+      } else {
+        setSelectedElement(null);
+      }
+    } else if (workspacePath) {
+      loadWorkspaceDirectory(workspacePath);
+    }
+  };
+
   useEffect(() => {
     if (platform === 'workspace') {
       if (workspaceApp) {
         setCurrentApp(workspaceApp);
-        if (workspaceApp.interactiveElements.length > 0) {
+        if ((workspaceApp.interactiveElements?.length ?? 0) > 0) {
           const first = workspaceApp.interactiveElements[0];
           setSelectedElement(first);
           if (first.filePath) {
             setMatchedFilePath(first.filePath);
             setMatchedFileContent(first.codeSnippet || '');
           }
+        } else {
+          setSelectedElement(null);
         }
       } else if (workspacePath) {
         loadWorkspaceDirectory(workspacePath);
@@ -128,19 +180,6 @@ export const App: React.FC = () => {
           })
           .catch(() => {});
       }
-      return;
-    }
-
-    if (apps.length > 0) {
-      const match = apps.find((a) => a.platform === platform) || apps[0];
-      setCurrentApp(match);
-      if (match.interactiveElements.length > 0) {
-        setSelectedElement(match.interactiveElements[0]);
-      } else {
-        setSelectedElement(null);
-      }
-      setMatchedFilePath('');
-      setMatchedFileContent('');
     }
   }, [platform]);
 
@@ -157,7 +196,7 @@ export const App: React.FC = () => {
           setWorkspaceApp(wsApp);
           setCurrentApp(wsApp);
           setPlatform('workspace');
-          if (wsApp.interactiveElements.length > 0) {
+          if ((wsApp.interactiveElements?.length ?? 0) > 0) {
             const first = wsApp.interactiveElements[0];
             setSelectedElement(first);
             if (first.filePath) {
@@ -227,34 +266,62 @@ export const App: React.FC = () => {
 
   const loadInitialData = async () => {
     try {
-      let sampleList = DEFAULT_APPS;
-      if (typeof (api as any).getSamples === 'function') {
-        try {
-          const fetched = await (api as any).getSamples();
-          if (Array.isArray(fetched) && fetched.length > 0) {
-            sampleList = fetched;
-          }
-        } catch {}
-      }
-
-      const [providerInfo, presetList, wsInfo] = await Promise.all([
-        api.getAiProviders(),
-        api.getAiPresets(),
+      const [providerInfo, presetList, wsInfoRaw] = await Promise.all([
+        api.getAiProviders().catch(() => null),
+        api.getAiPresets().catch(() => []),
         api.getWorkspaceInfo().catch(() => null),
       ]);
+      const wsInfo = wsInfoRaw as WorkspaceInfo | null;
 
       let initialWs = '';
       if (wsInfo?.sampleWorkspacePath) {
         initialWs = wsInfo.sampleWorkspacePath;
         setWorkspacePath(initialWs);
+      } else if (wsInfo?.workspaceDir) {
+        initialWs = wsInfo.workspaceDir;
+        setWorkspacePath(initialWs);
       }
 
-      setApps(sampleList);
-      if (sampleList.length > 0) {
-        const initial = sampleList.find((a) => a.platform === 'web') || sampleList[0];
-        setCurrentApp(initial);
-        if (initial.interactiveElements.length > 0) {
-          setSelectedElement(initial.interactiveElements[0]);
+      if (wsInfo?.skillMode) {
+        setIsSkillMode(true);
+      }
+      if (wsInfo?.targetDevice) {
+        setTargetDevice(wsInfo.targetDevice);
+      }
+      if (wsInfo?.targetPlatform) {
+        setTargetPlatform(wsInfo.targetPlatform);
+        setPlatform(wsInfo.targetPlatform);
+      } else if (wsInfo?.skillMode && wsInfo?.targetDevice) {
+        const plat = wsInfo.targetDevice === 'mobile' ? 'mobile' : wsInfo.targetDevice === 'desktop' ? 'desktop' : 'web';
+        setTargetPlatform(plat);
+        setPlatform(plat);
+      } else if (wsInfo?.detectedPlatform) {
+        setPlatform(wsInfo.detectedPlatform as PlatformType);
+      }
+
+      // Dynamically load workspace application
+      let dynamicApp: SampleApp | null = null;
+      if (initialWs && typeof api.getWorkspaceApp === 'function') {
+        try {
+          dynamicApp = await api.getWorkspaceApp(initialWs);
+        } catch (err: any) {
+          console.warn('Could not load workspace app in initial data:', err?.message);
+        }
+      }
+
+      if (dynamicApp) {
+        setWorkspaceApp(dynamicApp);
+        setApps([dynamicApp]);
+        setCurrentApp(dynamicApp);
+        if ((dynamicApp.interactiveElements?.length ?? 0) > 0) {
+          const firstElem = dynamicApp.interactiveElements[0];
+          setSelectedElement(firstElem);
+          if (firstElem.filePath) {
+            setMatchedFilePath(firstElem.filePath);
+            setMatchedFileContent(firstElem.codeSnippet || '');
+          }
+        } else {
+          setSelectedElement(null);
         }
       }
 
@@ -265,9 +332,9 @@ export const App: React.FC = () => {
           const activeComp = canvasState.activeComponent;
           const virtualApp: SampleApp = {
             id: `canvas-${Date.now()}`,
-            platform: 'web',
+            platform: (wsInfo?.detectedPlatform as PlatformType) || 'web',
             name: activeComp.name || 'Active Canvas Component',
-            viewport: { width: 1200, height: 750 },
+            viewport: activeComp.viewport || { width: 1200, height: 750 },
             description: 'Agent-decided active component',
             interactiveElements: [
               {
@@ -285,6 +352,7 @@ export const App: React.FC = () => {
             workspacePath: activeComp.filePath || undefined,
           };
           setCurrentApp(virtualApp);
+          setApps((prev) => [virtualApp, ...prev.filter((a) => a.id !== virtualApp.id)]);
           setSelectedElement(virtualApp.interactiveElements[0]);
           if (activeComp.filePath) {
             setMatchedFilePath(activeComp.filePath);
@@ -325,10 +393,11 @@ You can:
     }
     setSelectedElement(elem);
     setIsSnipMode(false);
-    if (currentApp && !currentApp.interactiveElements.some((e) => e.id === elem.id)) {
+    const currentElements = currentApp?.interactiveElements || [];
+    if (currentApp && !currentElements.some((e) => e.id === elem.id)) {
       const updatedApp = {
         ...currentApp,
-        interactiveElements: [...currentApp.interactiveElements, elem],
+        interactiveElements: [...currentElements, elem],
       };
       setCurrentApp(updatedApp);
       setApps((prev) => prev.map((a) => (a.id === currentApp.id ? updatedApp : a)));
@@ -346,22 +415,38 @@ You can:
       bounds: box,
       tagName: 'section',
       className: 'custom-snipped-component',
-      codeSnippet: `// Snipped UI Component (${Math.round(box.width)}×${Math.round(box.height)}px)\nexport const SnippedRegion: React.FC = () => (\n  <section className="p-4 bg-slate-900 rounded-xl text-white border border-slate-800">\n    <h3 className="font-semibold text-sm">Custom Snipped Component</h3>\n    <p className="text-xs text-slate-400 mt-1">Freeform snipped canvas region ready for AI redesign.</p>\n  </section>\n);`,
+      codeSnippet: `// Snipped UI Component (${Math.round(box.width)}×${Math.round(box.height)}px)\nexport const SnippedRegion: React.FC = () => (\n  <section className="p-4 bg-black rounded-xl text-white border border-white/20">\n    <h3 className="font-semibold text-sm">Custom Snipped Component</h3>\n    <p className="text-xs text-zinc-400 mt-1">Freeform snipped canvas region ready for AI redesign.</p>\n  </section>\n);`,
       styles: {
-        backgroundColor: '#0f172a',
-        textColor: '#f8fafc',
+        backgroundColor: '#000000',
+        textColor: '#ffffff',
         fontSize: '14px',
         borderRadius: '12px',
       },
     };
 
     if (currentApp) {
+      const currentElements = currentApp.interactiveElements || [];
       const updatedApp = {
         ...currentApp,
-        interactiveElements: [...currentApp.interactiveElements, customElement],
+        interactiveElements: [...currentElements, customElement],
       };
       setCurrentApp(updatedApp);
       setApps((prev) => prev.map((a) => (a.id === currentApp.id ? updatedApp : a)));
+    } else {
+      const newApp: SampleApp = {
+        id: `workspace-snip-${Date.now()}`,
+        platform: platform,
+        name: 'Workspace Snipped View',
+        viewport: {
+          width: Math.max(1200, Math.round(box.x + box.width + 40)),
+          height: Math.max(750, Math.round(box.y + box.height + 40)),
+        },
+        description: 'Dynamically created from snipped region',
+        interactiveElements: [customElement],
+        isWorkspace: true,
+      };
+      setCurrentApp(newApp);
+      setApps([newApp]);
     }
     setSelectedElement(customElement);
     syncWorkspaceFileForElement(customElement);
@@ -476,24 +561,67 @@ You can:
   };
 
   return (
-    <div className="w-screen h-screen flex flex-col bg-studio-950 text-studio-100 overflow-hidden font-sans">
+    <div className="w-screen h-screen flex flex-col bg-black text-white overflow-hidden font-sans">
       {/* Top Header */}
       <Header
         platform={platform}
-        onPlatformChange={(p) => setPlatform(p)}
+        onPlatformChange={handlePlatformChange}
         isSnipMode={isSnipMode}
         onToggleSnipMode={() => setIsSnipMode(!isSnipMode)}
         onToggleSelectMode={() => setIsSnipMode(false)}
         workspacePath={workspacePath}
         aiProviderName={aiProviderName}
+        isSkillMode={isSkillMode}
+        targetDevice={targetDevice}
+        targetPlatform={targetPlatform}
       />
+
+      {/* Mobile / Tablet Panel Switcher (< lg) */}
+      <div className="flex lg:hidden items-center justify-around bg-[#0d0d0d] border-b border-white/10 px-2 py-1.5 shrink-0 z-30 select-none">
+        <button
+          type="button"
+          onClick={() => setMobileActivePanel('canvas')}
+          className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
+            mobileActivePanel === 'canvas'
+              ? 'bg-orange-600 text-white font-semibold shadow-sm shadow-orange-600/30'
+              : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'
+          }`}
+        >
+          <Layout className="w-3.5 h-3.5" />
+          <span>Canvas</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setMobileActivePanel('inspector')}
+          className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-medium transition-all mx-1 ${
+            mobileActivePanel === 'inspector'
+              ? 'bg-orange-600 text-white font-semibold shadow-sm shadow-orange-600/30'
+              : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'
+          }`}
+        >
+          <Sliders className="w-3.5 h-3.5" />
+          <span>Inspector</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setMobileActivePanel('chat')}
+          className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
+            mobileActivePanel === 'chat'
+              ? 'bg-orange-600 text-white font-semibold shadow-sm shadow-orange-600/30'
+              : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'
+          }`}
+        >
+          <Sparkles className="w-3.5 h-3.5" />
+          <span>AI & Code</span>
+        </button>
+      </div>
 
       {/* Main 3-Column Studio Layout */}
       <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
         {/* Left / Center Column: Visual Canvas & Inspector */}
-        <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
+        <div className={`${mobileActivePanel === 'chat' ? 'hidden lg:flex' : 'flex'} flex-1 flex-col lg:flex-row overflow-hidden h-full`}>
           {/* Main Canvas */}
-          <div className="flex-1 flex flex-col overflow-hidden relative">
+          <div className={`${mobileActivePanel === 'canvas' ? 'flex' : 'hidden'} lg:flex flex-1 flex-col overflow-hidden relative h-full`}>
             <VisualCanvas
               currentApp={currentApp}
               selectedElement={selectedElement}
@@ -502,36 +630,41 @@ You can:
               onSnipComplete={handleSnipComplete}
               redesignedCode={redesignedCode}
               matchedFileContent={matchedFileContent}
+              isSkillMode={isSkillMode}
+              targetDevice={targetDevice}
             />
           </div>
 
           {/* Element Inspector Sidebar */}
-          <div className="w-full lg:w-72 xl:w-80 h-72 lg:h-full border-t lg:border-t-0 lg:border-l border-studio-800 bg-studio-900/60 overflow-hidden flex flex-col">
+          <div className={`${mobileActivePanel === 'inspector' ? 'flex' : 'hidden'} lg:flex w-full lg:w-72 xl:w-80 h-full border-t lg:border-t-0 lg:border-l border-white/10 bg-[#0d0d0d] overflow-hidden flex-col`}>
             <ElementInspector
               element={selectedElement}
               onFixAccessibility={handleFixAccessibility}
               matchedFilePath={matchedFilePath}
               matchedFileContent={matchedFileContent}
-              onOpenCodeEditor={() => setRightPanelTab('editor')}
+              onOpenCodeEditor={() => {
+                setRightPanelTab('editor');
+                setMobileActivePanel('chat');
+              }}
             />
           </div>
         </div>
 
         {/* Right Column: Switchable between AI Chat Panel / Live Redesign Preview AND Direct Code Editor */}
-        <div className="w-full lg:w-[480px] xl:w-[540px] h-96 lg:h-full flex flex-col overflow-hidden">
+        <div className={`${mobileActivePanel === 'chat' ? 'flex' : 'hidden'} lg:flex w-full lg:w-[480px] xl:w-[540px] h-full border-t lg:border-t-0 lg:border-l border-white/10 flex-col overflow-hidden`}>
           {/* Tab Header: Ask AI vs Direct Code Editor */}
-          <div className="h-10 bg-studio-900 border-b border-studio-800 px-3 flex items-center justify-between shrink-0 select-none">
-            <div className="flex items-center gap-1 bg-studio-950 p-0.5 rounded-lg border border-studio-800">
+          <div className="h-10 bg-[#0d0d0d] border-b border-white/10 px-3 flex items-center justify-between shrink-0 select-none">
+            <div className="flex items-center gap-1 bg-black p-0.5 rounded-lg border border-white/15">
               <button
                 type="button"
                 onClick={() => setRightPanelTab('ai')}
                 className={`flex items-center gap-1.5 px-3 py-1 rounded text-xs transition-all ${
                   rightPanelTab === 'ai'
-                    ? 'bg-indigo-600 text-white font-medium shadow-sm'
-                    : 'text-studio-400 hover:text-white'
+                    ? 'bg-orange-600 text-white font-medium shadow-sm'
+                    : 'text-zinc-400 hover:text-white'
                 }`}
               >
-                <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+                <Sparkles className="w-3.5 h-3.5 text-orange-400" />
                 <span>Ask AI</span>
               </button>
               <button
@@ -539,11 +672,11 @@ You can:
                 onClick={() => setRightPanelTab('editor')}
                 className={`flex items-center gap-1.5 px-3 py-1 rounded text-xs transition-all ${
                   rightPanelTab === 'editor'
-                    ? 'bg-indigo-600 text-white font-medium shadow-sm'
-                    : 'text-studio-400 hover:text-white'
+                    ? 'bg-orange-600 text-white font-medium shadow-sm'
+                    : 'text-zinc-400 hover:text-white'
                 }`}
               >
-                <Code2 className="w-3.5 h-3.5 text-indigo-400" />
+                <Code2 className="w-3.5 h-3.5 text-white" />
                 <span>Direct Code Editor</span>
               </button>
             </div>
@@ -575,7 +708,7 @@ You can:
                   onClosePreview={() => setRedesignedCode('')}
                 />
               </div>
-              <div className="h-72 border-t border-studio-800 overflow-hidden">
+              <div className="h-72 border-t border-white/10 overflow-hidden">
                 <AIChatPanel
                   messages={messages}
                   onSendMessage={handleSendMessage}

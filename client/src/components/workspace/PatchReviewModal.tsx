@@ -81,7 +81,7 @@ export const PatchReviewModal: React.FC<PatchReviewModalProps> = ({
         {/* Header */}
         <div className="p-4 border-b border-studio-800 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-indigo-600/20 text-indigo-400 flex items-center justify-center border border-indigo-500/30">
+            <div className="w-8 h-8 rounded-lg bg-orange-600/20 text-orange-400 flex items-center justify-center border border-orange-500/30">
               <FileCode className="w-4 h-4" />
             </div>
             <div>
@@ -110,7 +110,7 @@ export const PatchReviewModal: React.FC<PatchReviewModalProps> = ({
               type="checkbox"
               checked={createBackup}
               onChange={(e) => setCreateBackup(e.target.checked)}
-              className="rounded bg-studio-800 border-studio-700 text-indigo-600 focus:ring-0"
+              className="rounded bg-studio-800 border-studio-700 text-orange-600 focus:ring-0"
             />
             <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
             <span>Create safety backup (.bak)</span>
@@ -184,7 +184,7 @@ export const PatchReviewModal: React.FC<PatchReviewModalProps> = ({
             <button
               onClick={handleApply}
               disabled={isApplying || !newCode.trim()}
-              className="flex items-center gap-1.5 px-5 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-lg text-xs font-semibold shadow-lg shadow-indigo-600/30 transition-all"
+              className="flex items-center gap-1.5 px-5 py-2 bg-orange-600 hover:bg-orange-500 disabled:opacity-50 text-white rounded-lg text-xs font-semibold shadow-lg shadow-orange-600/30 transition-all"
             >
               <Sparkles className="w-3.5 h-3.5" />
               <span>{isApplying ? 'Applying Patch...' : 'Apply Patch to File'}</span>

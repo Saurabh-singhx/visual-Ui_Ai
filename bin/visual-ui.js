@@ -6,11 +6,17 @@
  *   scan    Scan and inventory UI components (Mobile, Web, Desktop)
  *   start   Launch unified dashboard server on port 3838 (or custom port)
  *   modify  In-session AI code modification for target component/element
+ *   render  Inject and render a focused component on the active canvas
  */
 
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
+
+let picomatch;
+try {
+  picomatch = require('picomatch');
+} catch {}
 
 const args = process.argv.slice(2);
 
@@ -23,32 +29,81 @@ Commands:
   start    Start the visual workbench server and dashboard
   modify   Modify a component or element using prompt instructions
   render   Inject and render a focused component on the active canvas
+  listen   Listen for UI element selections from browser in active session
 
 Options:
-  -h, --help     Show help information
-  -v, --version  Show CLI version
+  --skill            Launch in agent skill mode (filters UI to target device)
+  --device <type>    Restrict UI to specific device (mobile, tablet, desktop)
+  --platform <type>  Restrict UI to specific platform (web, mobile, desktop)
+  -h, --help         Show help information
+  -v, --version      Show CLI version
 
 Run 'visual-ui <command> --help' for details on a specific command.
 `);
 }
 
+const VALUE_FLAGS = new Set([
+  'dir',
+  'file',
+  'focus',
+  'port',
+  'prompt',
+  'element',
+  'code',
+  'name',
+  'props',
+  'platform',
+  'device',
+  'format',
+  'include',
+  'exclude',
+  'timeout',
+  't',
+  'p',
+  'd',
+  'f',
+]);
+
+const ARRAY_FLAGS = new Set(['include', 'exclude']);
+
 function parseFlags(argv) {
   const flags = { _: [] };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg.startsWith('--')) {
-      const key = arg.slice(2);
-      if (i + 1 < argv.length && !argv[i + 1].startsWith('-')) {
-        flags[key] = argv[++i];
+    if (arg.startsWith('--') || (arg.startsWith('-') && arg.length > 1 && !/^-?[0-9]+(\.[0-9]+)?$/.test(arg))) {
+      const isLong = arg.startsWith('--');
+      const prefixLen = isLong ? 2 : 1;
+      const rest = arg.slice(prefixLen);
+      let key = rest;
+      let val;
+      const eqIdx = rest.indexOf('=');
+
+      if (eqIdx !== -1) {
+        key = rest.slice(0, eqIdx);
+        val = rest.slice(eqIdx + 1);
+      } else if (i + 1 < argv.length && !argv[i + 1].startsWith('-')) {
+        val = argv[++i];
       } else {
-        flags[key] = true;
+        // Naked flag: if it expects a value, do NOT assign boolean true
+        if (VALUE_FLAGS.has(key)) {
+          val = undefined;
+        } else {
+          val = true;
+        }
       }
-    } else if (arg.startsWith('-')) {
-      const key = arg.slice(1);
-      if (i + 1 < argv.length && !argv[i + 1].startsWith('-')) {
-        flags[key] = argv[++i];
-      } else {
-        flags[key] = true;
+
+      if (val !== undefined) {
+        if (ARRAY_FLAGS.has(key)) {
+          if (!flags[key]) {
+            flags[key] = [val];
+          } else if (Array.isArray(flags[key])) {
+            flags[key].push(val);
+          } else {
+            flags[key] = [flags[key], val];
+          }
+        } else {
+          flags[key] = val;
+        }
       }
     } else {
       flags._.push(arg);
@@ -74,82 +129,247 @@ const IGNORED_DIRS = new Set([
   '.nuxt',
   'out',
   '$recycle.bin',
+  'system volume information',
 ]);
 
 const ALLOWED_EXTS = new Set(['.tsx', '.jsx', '.vue', '.svelte', '.html', '.dart', '.xml', '.ts', '.js']);
 
+function matchesPattern(relPath, compName, pattern) {
+  if (!pattern) return false;
+  const normRel = relPath.replace(/\\/g, '/');
+  const lowerRel = normRel.toLowerCase();
+  const lowerPat = pattern.toLowerCase();
+
+  // Exact match
+  if (normRel === pattern || compName === pattern) return true;
+  if (lowerRel === lowerPat || (compName && compName.toLowerCase() === lowerPat)) return true;
+
+  // Directory prefix match (e.g. test/, deprecated/, src/components/)
+  if (pattern.endsWith('/')) {
+    const dirPrefix = pattern.replace(/\/+$/, '');
+    if (
+      normRel.startsWith(dirPrefix + '/') ||
+      normRel.includes('/' + dirPrefix + '/') ||
+      normRel === dirPrefix ||
+      lowerRel.startsWith(dirPrefix.toLowerCase() + '/') ||
+      lowerRel.includes('/' + dirPrefix.toLowerCase() + '/') ||
+      lowerRel === dirPrefix.toLowerCase()
+    ) {
+      return true;
+    }
+  }
+
+  // Picomatch glob evaluation
+  if (picomatch) {
+    try {
+      const patterns = [pattern];
+      if (pattern.endsWith('/')) {
+        patterns.push(pattern + '**', '**/' + pattern + '**', pattern.slice(0, -1));
+      } else {
+        patterns.push('**/' + pattern, '**/' + pattern + '/**', pattern + '/**');
+      }
+      const isMatch = picomatch(patterns, { dot: true, nocase: true });
+      if (isMatch(normRel) || (compName && isMatch(compName))) {
+        return true;
+      }
+    } catch {}
+  } else {
+    // Regex glob fallback
+    try {
+      const regStr = pattern
+        .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+        .replace(/\*\*/g, '.*')
+        .replace(/(?<!\.)\*/g, '[^/]*')
+        .replace(/\?/g, '.');
+      const re = new RegExp(`(^|/)${regStr}($|/)`, 'i');
+      if (re.test(normRel) || (compName && re.test(compName))) return true;
+    } catch {}
+  }
+
+  // Substring fallback
+  if (normRel.includes(pattern) || (compName && compName.includes(pattern))) return true;
+
+  return false;
+}
+
 function isExcluded(filePath, relPath) {
-  const lower = relPath.toLowerCase();
+  const normRel = relPath.replace(/\\/g, '/');
+  const baseName = path.basename(normRel);
+  const lowerBase = baseName.toLowerCase();
+
+  // 1. Tests: __tests__ dir, tests? dir, testing dir, *.test.*, *.spec.*, test.*, spec.*
   if (
-    lower.endsWith('.test.tsx') ||
-    lower.endsWith('.test.ts') ||
-    lower.endsWith('.test.jsx') ||
-    lower.endsWith('.test.js') ||
-    lower.endsWith('.spec.tsx') ||
-    lower.endsWith('.spec.ts') ||
-    lower.endsWith('.spec.jsx') ||
-    lower.endsWith('.spec.js') ||
-    lower.endsWith('.d.ts')
+    /(?:^|\/)(?:__tests__|tests?|testing)(?:\/|$)/i.test(normRel) ||
+    lowerBase.includes('.test.') ||
+    lowerBase.includes('.spec.') ||
+    lowerBase.startsWith('test.') ||
+    lowerBase.startsWith('spec.')
   ) {
     return true;
   }
-  if (/(?:^|\/)(?:__tests__|tests|testing)(?:\/|$)/.test(lower)) return true;
-  if (/(?:^|\/)(?:stores?|redux|zustand|slices|reducers?)(?:\/|$)/.test(lower)) return true;
-  if (/(?:^|\/)(?:services?|helpers?|utils?)(?:\/|$)/.test(lower)) {
-    if (!lower.endsWith('.tsx') && !lower.endsWith('.jsx')) return true;
+
+  // 2. Type definitions: *.d.ts, types.ts, types.d.ts, type.ts, types/ dir
+  if (
+    lowerBase.endsWith('.d.ts') ||
+    lowerBase === 'types.ts' ||
+    lowerBase === 'types.d.ts' ||
+    lowerBase === 'type.ts' ||
+    /(?:^|\/)types(?:\/|$)/i.test(normRel)
+  ) {
+    return true;
   }
+
+  // 3. State stores: stores/, slices/, redux/, zustand/
+  if (
+    /(?:^|\/)(?:stores?|slices?|redux|zustand)(?:\/|$)/i.test(normRel) ||
+    lowerBase.includes('store.') ||
+    lowerBase.includes('slice.') ||
+    lowerBase.startsWith('store-') ||
+    lowerBase.startsWith('slice-')
+  ) {
+    return true;
+  }
+
+  // 4. Backend services: services/, *service.*
+  if (
+    /(?:^|\/)services?(?:\/|$)/i.test(normRel) ||
+    lowerBase.includes('service.') ||
+    lowerBase.startsWith('service-')
+  ) {
+    return true;
+  }
+
+  // 5. Utilities & helpers: helpers/, utils/, *helper.*, *util.*
+  if (
+    /(?:^|\/)(?:helpers?|utils?)(?:\/|$)/i.test(normRel) ||
+    lowerBase.includes('helper.') ||
+    lowerBase.includes('helpers.') ||
+    lowerBase.includes('util.') ||
+    lowerBase.includes('utils.') ||
+    lowerBase.startsWith('helper-') ||
+    lowerBase.startsWith('util-')
+  ) {
+    return true;
+  }
+
+  // 6. CLI scripts, bins, and scripts/ directory
+  if (
+    /(?:^|\/)(?:bin|scripts?)(?:\/|$)/i.test(normRel) ||
+    lowerBase === 'visual-ui.js' ||
+    lowerBase.endsWith('.sh')
+  ) {
+    return true;
+  }
+
   return false;
+}
+
+function extractComponentName(chunk, baseName) {
+  const match = chunk.match(/(?:export\s+(?:default\s+)?(?:const|function|class)\s+|function\s+|class\s+)([A-Z][A-Za-z0-9_]*)/);
+  if (match && match[1] && match[1] !== 'Default' && match[1] !== 'React') {
+    return match[1];
+  }
+  const arrowMatch = chunk.match(/(?:const|let|var)\s+([A-Z][A-Za-z0-9_]*)\s*=/);
+  if (arrowMatch && arrowMatch[1]) {
+    return arrowMatch[1];
+  }
+  return baseName;
+}
+
+function extractRootElement(chunk) {
+  const match = chunk.match(/(?:return\s*\(?|=>\s*\(?)\s*(?:<>\s*)?<([A-Za-z][A-Za-z0-9_-]*)/);
+  if (match && match[1]) {
+    const raw = match[1];
+    if (raw !== 'React' && raw !== 'Fragment') return raw;
+  }
+  const anyTag = chunk.match(/<([A-Za-z][A-Za-z0-9_-]*)/);
+  if (anyTag && anyTag[1]) {
+    const raw = anyTag[1];
+    if (raw !== 'React' && raw !== 'Fragment') return raw;
+  }
+  return undefined;
 }
 
 function classifyComponent(filePath, relPath, content) {
   const ext = path.extname(filePath).toLowerCase();
-  const fileBase = path.basename(filePath, ext);
+  const normRel = relPath.replace(/\\/g, '/').toLowerCase();
+  const baseName = path.basename(filePath, ext);
 
-  let name = fileBase;
-  const nameMatch = content.match(/(?:export\s+(?:default\s+)?(?:const|function|class)\s+|function\s+|class\s+)([A-Za-z0-9_]+)/);
-  if (nameMatch && nameMatch[1] && nameMatch[1] !== 'default') {
-    name = nameMatch[1];
-  }
+  // Shebang or CLI script check
+  if (content.startsWith('#!')) return null;
 
-  let platform = 'web';
-  let rootElement = 'div';
-
-  const isMobile =
-    ext === '.dart' ||
-    ext === '.xml' ||
-    content.includes('react-native') ||
-    content.includes('<View') ||
-    content.includes('<Text') ||
-    content.includes('<SafeAreaView') ||
-    content.includes('<TouchableOpacity') ||
-    relPath.includes('/mobile/') ||
-    relPath.includes('/screens/');
-
+  // 1. Desktop check
   const isDesktop =
-    content.includes('electron') ||
-    content.includes('tauri') ||
-    content.includes('QWidget') ||
-    content.includes('QMainWindow') ||
-    relPath.includes('/desktop/') ||
-    name.toLowerCase().includes('desktop');
+    normRel.includes('/desktop/') ||
+    normRel.includes('src-tauri') ||
+    normRel.includes('/electron/') ||
+    content.includes("'electron'") ||
+    content.includes('"electron"') ||
+    content.includes("'@tauri-apps/api'") ||
+    content.includes('"@tauri-apps/api"');
 
-  if (isMobile) {
-    platform = 'mobile';
-    rootElement = ext === '.dart' ? 'Widget' : content.includes('<View') ? 'View' : 'ViewGroup';
-  } else if (isDesktop) {
-    platform = 'desktop';
-    rootElement = content.includes('QWidget') ? 'QWidget' : 'Window';
-  } else {
-    platform = 'web';
-    const tagMatch = content.match(/<([a-zA-Z][a-zA-Z0-9]*)\b/);
-    if (tagMatch) rootElement = tagMatch[1];
+  if (isDesktop) {
+    return {
+      name: extractComponentName(content, baseName),
+      platform: 'desktop',
+      rootElement: extractRootElement(content) || (content.includes('QWidget') ? 'QWidget' : 'div'),
+    };
   }
 
-  return { name, platform, rootElement };
+  // 2. Mobile check: Flutter Dart
+  if (ext === '.dart' && (content.includes('StatelessWidget') || content.includes('StatefulWidget') || content.includes('Widget build('))) {
+    const dartClassMatch = content.match(/class\s+([A-Za-z0-9_]+)\s+extends\s+(?:Stateless|Stateful)Widget/);
+    return {
+      name: dartClassMatch ? dartClassMatch[1] : baseName,
+      platform: 'mobile',
+      rootElement: 'Widget',
+    };
+  }
+
+  // Mobile check: Android layout XML
+  if (ext === '.xml' && (content.includes('<LinearLayout') || content.includes('<ConstraintLayout') || content.includes('<RelativeLayout') || content.includes('<FrameLayout') || content.includes('<CoordinatorLayout') || content.includes('<ScrollView') || content.includes('<androidx.'))) {
+    const xmlRootMatch = content.match(/<([A-Za-z0-9_.-]+)[\s>]/);
+    return {
+      name: baseName,
+      platform: 'mobile',
+      rootElement: xmlRootMatch ? xmlRootMatch[1] : 'ViewGroup',
+    };
+  }
+
+  // Mobile check: React Native
+  const isReactNative =
+    (ext === '.tsx' || ext === '.jsx' || ext === '.js' || ext === '.ts') &&
+    (content.includes("'react-native'") || content.includes('"react-native"') || (content.includes('<View') && content.includes('<Text')) || content.includes('<SafeAreaView'));
+
+  if (isReactNative) {
+    return {
+      name: extractComponentName(content, baseName),
+      platform: 'mobile',
+      rootElement: extractRootElement(content) || 'View',
+    };
+  }
+
+  // 3. Web check: .tsx, .jsx, .vue, .svelte, .html (Strictly exclude pure .ts or .js)
+  if (['.tsx', '.jsx', '.vue', '.svelte', '.html'].includes(ext)) {
+    const hasJsxOrDom =
+      /(?:return\s*\(?|=>\s*\(?)\s*(?:<>\s*)?<[a-zA-Z]/s.test(content) ||
+      /<template\b/s.test(content) ||
+      /<(?:div|span|header|main|section|button|nav|p|article|h[1-6]|table|form)\b/i.test(content);
+
+    if (hasJsxOrDom) {
+      return {
+        name: extractComponentName(content, baseName),
+        platform: 'web',
+        rootElement: extractRootElement(content) || 'div',
+      };
+    }
+  }
+
+  return null;
 }
 
 function scanProject(baseDir, options = {}) {
-  const resolved = path.resolve(baseDir);
+  const resolved = path.resolve(typeof baseDir === 'string' && baseDir.trim() ? baseDir : process.cwd());
   if (!fs.existsSync(resolved)) {
     throw new Error(`Directory does not exist: ${baseDir}`);
   }
@@ -184,7 +404,8 @@ function scanProject(baseDir, options = {}) {
       const relPath = path.relative(resolved, fullPath).replace(/\\/g, '/');
 
       if (entry.isDirectory()) {
-        if (IGNORED_DIRS.has(entry.name.toLowerCase())) continue;
+        const lowerName = entry.name.toLowerCase();
+        if (IGNORED_DIRS.has(lowerName)) continue;
         if (isExcluded(fullPath, relPath)) continue;
         walk(fullPath);
       } else if (entry.isFile()) {
@@ -203,16 +424,11 @@ function scanProject(baseDir, options = {}) {
           continue;
         }
 
-        // Heuristic check: does it look like UI?
-        const hasUI =
-          chunk.includes('<') ||
-          chunk.includes('Widget') ||
-          chunk.includes('template>') ||
-          chunk.includes('render(') ||
-          chunk.includes('return');
-        if (!hasUI) continue;
+        if (chunk.startsWith('#!')) continue;
 
         const classified = classifyComponent(fullPath, relPath, chunk);
+        if (!classified) continue;
+
         const tagMatches = chunk.match(/<[A-Za-z][A-Za-z0-9_-]*/g);
         const elementCount = tagMatches ? tagMatches.length : 1;
 
@@ -239,10 +455,10 @@ function scanProject(baseDir, options = {}) {
     filtered = filtered.filter((c) => c.platform === platformFilter);
   }
   if (include.length > 0) {
-    filtered = filtered.filter((c) => include.some((inc) => c.relativePath.includes(inc) || c.name.includes(inc)));
+    filtered = filtered.filter((c) => include.some((inc) => matchesPattern(c.relativePath, c.name, inc)));
   }
   if (exclude.length > 0) {
-    filtered = filtered.filter((c) => !exclude.some((exc) => c.relativePath.includes(exc) || c.name.includes(exc)));
+    filtered = filtered.filter((c) => !exclude.some((exc) => matchesPattern(c.relativePath, c.name, exc)));
   }
 
   const folderBreakdown = {};
@@ -284,22 +500,25 @@ Options:
   --focus <path>     Focus on a specific subdirectory or package
   --platform <type>  Filter by platform: web, mobile, desktop, all
   --format <type>    Output format: table (default) or json
-  --include <glob>   Include patterns
-  --exclude <glob>   Exclude patterns
+  --include <glob>   Include patterns (can be specified multiple times)
+  --exclude <glob>   Exclude patterns (can be specified multiple times)
   -h, --help         Show this help message
 `);
     process.exit(0);
   }
 
-  const targetDir = flags.dir || process.cwd();
-  const format = (flags.format || 'table').toLowerCase();
+  const targetDir = typeof flags.dir === 'string' && flags.dir.trim() ? flags.dir : process.cwd();
+  const format = (typeof flags.format === 'string' ? flags.format : 'table').toLowerCase();
 
   try {
+    const rawInclude = Array.isArray(flags.include) ? flags.include : (flags.include ? [flags.include] : []);
+    const rawExclude = Array.isArray(flags.exclude) ? flags.exclude : (flags.exclude ? [flags.exclude] : []);
+
     const result = scanProject(targetDir, {
-      focus: flags.focus,
-      platform: flags.platform,
-      include: flags.include ? [flags.include] : [],
-      exclude: flags.exclude ? [flags.exclude] : [],
+      focus: typeof flags.focus === 'string' ? flags.focus : undefined,
+      platform: typeof flags.platform === 'string' ? flags.platform : undefined,
+      include: rawInclude,
+      exclude: rawExclude,
     });
 
     if (format === 'json') {
@@ -360,14 +579,53 @@ Options:
   --dir <path>       Workspace directory to link (default: current working directory)
   --focus <path>     Initial directory focus
   --file <path>      Focus canvas strictly on a specific component file
+  --skill            Launch in agent skill mode (filters UI to target device)
+  --device <type>    Restrict UI to specific device (mobile, tablet, desktop)
+  --platform <type>  Restrict UI to specific platform (web, mobile, desktop)
+  --daemon           Launch server in background non-blocking daemon mode
+  --check            Check if server is active and running on the target port
   -h, --help         Show this help message
 `);
     process.exit(0);
   }
 
-  const port = flags.port || process.env.PORT || 3838;
-  const targetDir = path.resolve(flags.dir || process.cwd());
-  const focusFile = flags.file ? path.resolve(flags.file) : '';
+  const port = (typeof flags.port === 'string' || typeof flags.port === 'number') ? flags.port : (process.env.PORT || 3838);
+  const targetDir = path.resolve((typeof flags.dir === 'string' && flags.dir.trim()) ? flags.dir : process.cwd());
+  const focusFile = (typeof flags.file === 'string' && flags.file.trim()) ? path.resolve(flags.file) : '';
+
+  // Handle --check
+  if (flags.check) {
+    const http = require('http');
+    const req = http.request(
+      {
+        hostname: '127.0.0.1',
+        port: Number(port),
+        path: '/api/info',
+        method: 'GET',
+        timeout: 2000,
+      },
+      (res) => {
+        if (res.statusCode >= 200 && res.statusCode < 400) {
+          console.log(`✓ Visual UI Studio is running on port ${port}`);
+          process.exit(0);
+        } else {
+          console.log(`✗ Visual UI Studio returned status ${res.statusCode} on port ${port}`);
+          process.exit(1);
+        }
+      }
+    );
+    req.on('error', (err) => {
+      console.log(`✗ Visual UI Studio is not running on port ${port} (${err.message})`);
+      process.exit(1);
+    });
+    req.on('timeout', () => {
+      req.destroy();
+      console.log(`✗ Timed out checking Visual UI Studio on port ${port}`);
+      process.exit(1);
+    });
+    req.end();
+    return;
+  }
 
   console.log(`🚀 Starting Visual UI Studio on port ${port}...`);
   console.log(`📁 Target Workspace: ${targetDir}`);
@@ -383,14 +641,39 @@ Options:
     ? ['node', [serverDistPath]]
     : ['npx', ['tsx', serverPath]];
 
+  const isSkill = Boolean(flags.skill || flags['skill-mode'] || process.env.SKILL_MODE);
+  const targetDevice = flags.device || process.env.TARGET_DEVICE || '';
+  const targetPlatform = flags.platform || process.env.TARGET_PLATFORM || '';
+
+  const childEnv = {
+    ...process.env,
+    PORT: String(port),
+    WORKSPACE_DIR: targetDir,
+    FOCUS_FILE: focusFile,
+    SKILL_MODE: isSkill ? 'true' : '',
+    TARGET_DEVICE: targetDevice,
+    TARGET_PLATFORM: targetPlatform,
+  };
+
+  if (flags.daemon) {
+    const outLog = path.resolve(__dirname, '../.visual-ui.log');
+    const outFd = fs.openSync(outLog, 'a');
+    const child = spawn(runner[0], runner[1], {
+      cwd: path.resolve(__dirname, '..'),
+      env: childEnv,
+      detached: true,
+      stdio: ['ignore', outFd, outFd],
+    });
+    child.unref();
+
+    console.log(`🚀 Visual UI Studio launched in daemon mode (PID: ${child.pid}) on port ${port}.`);
+    console.log(`📄 Output log: ${outLog}`);
+    process.exit(0);
+  }
+
   const child = spawn(runner[0], runner[1], {
     cwd: path.resolve(__dirname, '..'),
-    env: {
-      ...process.env,
-      PORT: String(port),
-      WORKSPACE_DIR: targetDir,
-      FOCUS_FILE: focusFile,
-    },
+    env: childEnv,
     stdio: 'inherit',
   });
 
@@ -423,12 +706,12 @@ Options:
     process.exit(0);
   }
 
-  const port = flags.port || process.env.PORT || 3838;
-  const filePath = flags.file ? path.resolve(flags.file) : undefined;
-  const code = flags.code || undefined;
-  const componentName = flags.name || undefined;
+  const port = (typeof flags.port === 'string' || typeof flags.port === 'number') ? flags.port : (process.env.PORT || 3838);
+  const filePath = (typeof flags.file === 'string' && flags.file.trim()) ? path.resolve(flags.file) : undefined;
+  const code = typeof flags.code === 'string' ? flags.code : undefined;
+  const componentName = typeof flags.name === 'string' ? flags.name : undefined;
   let props = undefined;
-  if (flags.props) {
+  if (typeof flags.props === 'string') {
     try {
       props = JSON.parse(flags.props);
     } catch {
@@ -446,7 +729,7 @@ Options:
   const req = http.request(
     {
       hostname: 'localhost',
-      port,
+      port: Number(port),
       path: '/api/canvas/render',
       method: 'POST',
       headers: {
@@ -498,13 +781,14 @@ Applies prompt-driven in-session modifications (including animations) to target 
 Options:
   --file <path>      Target component file path (required)
   --prompt <text>    Modification prompt description (required)
-  --element <sel>    Target element selector (optional)
+  --element <sel>    Target element selector / ID (optional)
+  --port <number>    Server port (default: 3838)
   -h, --help         Show this help message
 `);
     process.exit(0);
   }
 
-  if (!flags.file || !flags.prompt) {
+  if (!flags.file || typeof flags.file !== 'string' || !flags.prompt || typeof flags.prompt !== 'string') {
     console.error('Error: Both --file and --prompt are required for modification.');
     process.exit(1);
   }
@@ -515,70 +799,264 @@ Options:
     process.exit(1);
   }
 
-  try {
-    const original = fs.readFileSync(filePath, 'utf8');
-    const backupPath = `${filePath}.bak-${Date.now()}`;
-    fs.writeFileSync(backupPath, original, 'utf8');
+  const port = (typeof flags.port === 'string' || typeof flags.port === 'number') ? flags.port : (process.env.PORT || 3838);
+  const elementId = typeof flags.element === 'string' ? flags.element : undefined;
+  const prompt = flags.prompt;
 
-    let updated = original;
-    const prompt = flags.prompt.toLowerCase();
+  // Direct modification engine executor
+  const applyDirectModification = () => {
+    let aiService;
+    try {
+      require('tsx/cjs');
+      const mod = require(path.resolve(__dirname, '../server/src/services/aiService.ts'));
+      aiService = mod.aiService;
+    } catch {
+      try {
+        const mod = require(path.resolve(__dirname, '../server/dist/services/aiService.js'));
+        aiService = mod.aiService;
+      } catch (err) {
+        console.error(`Error: Unable to load modification engine: ${err.message}`);
+        process.exit(1);
+      }
+    }
 
-    // Apply animation / styling modifications
-    if (prompt.includes('scale') || prompt.includes('hover')) {
-      updated = updated.replace(/className=(["'])(.*?)\1/, (match, q, classes) => {
-        return `className=${q}${classes} transition-all duration-300 ease-in-out hover:scale-105 hover:shadow-xl${q}`;
+    try {
+      const original = fs.readFileSync(filePath, 'utf8');
+      const modResult = aiService.modifyComponentCode(original, prompt, elementId);
+
+      // Report graceful error on no-match
+      if (modResult.modifiedCode === original || !modResult.appliedChanges || modResult.appliedChanges.length === 0) {
+        console.error(`Error: No matching element or modification target found in ${path.basename(filePath)} for: ${elementId || prompt}`);
+        process.exit(1);
+      }
+
+      // Create backup file with timestamp
+      const backupPath = `${filePath}.bak-${Date.now()}`;
+      fs.writeFileSync(backupPath, original, 'utf8');
+
+      // Atomic write via temporary file
+      const tempPath = `${filePath}.tmp-${Date.now()}`;
+      fs.writeFileSync(tempPath, modResult.modifiedCode, 'utf8');
+      fs.renameSync(tempPath, filePath);
+
+      console.log(`✓ Successfully modified ${path.basename(filePath)}`);
+      if (modResult.appliedChanges.length > 0) {
+        console.log(`  Applied changes: ${modResult.appliedChanges.join(', ')}`);
+      }
+      console.log(`  Backup created at: ${path.basename(backupPath)}`);
+      process.exit(0);
+    } catch (err) {
+      console.error(`Modification failed: ${err.message}`);
+      process.exit(1);
+    }
+  };
+
+  // Try calling server API if reachable, else fall back to direct engine
+  const http = require('http');
+  const payload = JSON.stringify({ filePath, prompt, elementId });
+
+  const req = http.request(
+    {
+      hostname: '127.0.0.1',
+      port: Number(port),
+      path: '/api/component/modify',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(payload),
+      },
+      timeout: 800,
+    },
+    (res) => {
+      let body = '';
+      res.on('data', (chunk) => (body += chunk));
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(body);
+          if (res.statusCode >= 200 && res.statusCode < 300 && json.success) {
+            console.log(`✓ Successfully modified ${path.basename(filePath)}`);
+            if (json.appliedChanges && json.appliedChanges.length > 0) {
+              console.log(`  Applied changes: ${json.appliedChanges.join(', ')}`);
+            }
+            if (json.backupPath) {
+              console.log(`  Backup created at: ${path.basename(json.backupPath)}`);
+            }
+            process.exit(0);
+          } else {
+            console.error(`Modification failed: ${json.error || body}`);
+            process.exit(1);
+          }
+        } catch {
+          console.error(`Modification failed: ${body}`);
+          process.exit(1);
+        }
       });
     }
+  );
 
-    if (prompt.includes('emerald') || prompt.includes('green')) {
-      updated = updated.replace(/bg-[a-z]+-[0-9]+/g, 'bg-emerald-600')
-        .replace(/text-[a-z]+-[0-9]+/g, 'text-emerald-400');
-    }
+  req.on('error', () => {
+    // Server is not running or unreachable: delegate directly to local modification engine
+    applyDirectModification();
+  });
 
-    if (prompt.includes('pill') || prompt.includes('rounded-full')) {
-      updated = updated.replace(/rounded-(?:lg|xl|md|2xl)/g, 'rounded-full');
-    }
+  req.on('timeout', () => {
+    req.destroy();
+    applyDirectModification();
+  });
 
-    fs.writeFileSync(filePath, updated, 'utf8');
-    console.log(`✓ Successfully modified ${path.basename(filePath)}`);
-    console.log(`  Backup created at: ${path.basename(backupPath)}`);
+  req.write(payload);
+  req.end();
+}
+
+function handleListen(argv) {
+  const flags = parseFlags(argv);
+  if (flags.help || flags.h) {
+    console.log(`
+Usage: visual-ui listen [options]
+
+Listens for interactive browser UI element selections in an active editing session.
+Consumes selections in FIFO order from .ui-feedback/queue and emits JSON to stdout.
+
+Options:
+  --timeout <number> Maximum wait time in milliseconds (default: 180000)
+  --dir <path>       Workspace root directory (default: current working directory)
+  -h, --help         Show this help message
+`);
     process.exit(0);
-  } catch (err) {
-    console.error(`Modification failed: ${err.message}`);
-    process.exit(1);
+  }
+
+  const baseDir = path.resolve((typeof flags.dir === 'string' && flags.dir.trim()) ? flags.dir : process.cwd());
+  const queueDir = path.resolve(baseDir, '.ui-feedback/queue');
+  const timeoutMs =
+    typeof flags.timeout === 'string' || typeof flags.timeout === 'number'
+      ? parseInt(String(flags.timeout), 10)
+      : parseInt(process.env.AGY_WAIT_TIMEOUT_MS || '180000', 10);
+  const POLL_INTERVAL_MS = 250;
+
+  try {
+    fs.mkdirSync(queueDir, { recursive: true });
+  } catch {}
+
+  const startTime = Date.now();
+
+  function check() {
+    try {
+      if (Date.now() - startTime > timeoutMs) {
+        console.log(
+          JSON.stringify({
+            status: 'heartbeat_timeout',
+            message: 'No selection received within window. Re-invoke await-selection.js to continue listening.',
+          })
+        );
+        process.exit(0);
+      }
+
+      if (!fs.existsSync(queueDir)) return false;
+
+      const files = fs
+        .readdirSync(queueDir)
+        .filter((f) => f.endsWith('.json'))
+        .sort();
+
+      if (files.length === 0) return false;
+
+      const target = path.join(queueDir, files[0]);
+      let raw = '';
+      try {
+        raw = fs.readFileSync(target, 'utf8').trim();
+      } catch {
+        return false;
+      }
+      if (!raw) return false;
+
+      let parsed;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        return false;
+      }
+
+      try {
+        fs.unlinkSync(target);
+      } catch {}
+
+      const isDone = parsed.status === 'done';
+      const sessionLockFile = path.resolve(baseDir, '.ui-feedback/session.lock');
+      if (isDone && fs.existsSync(sessionLockFile)) {
+        try {
+          fs.unlinkSync(sessionLockFile);
+        } catch {}
+      }
+
+      const selector = (parsed.element && parsed.element.selector) || 'unknown';
+      const hint = (parsed.element && parsed.element.componentHint) || 'unknown';
+      const instruction = parsed.instruction || '';
+
+      const output = isDone
+        ? {
+            decision: 'allow',
+            status: 'done',
+            message: 'Visual UI session finished by user.',
+            ...parsed,
+            remainingInQueue: files.length - 1,
+          }
+        : {
+            decision: 'continue',
+            status: parsed.status || 'pending',
+            reason: `User selected element "${selector}" (component hint: ${hint}) with instruction: "${instruction}". Modify the corresponding UI component now.`,
+            ...parsed,
+            remainingInQueue: files.length - 1,
+          };
+
+      console.log(JSON.stringify(output, null, 2));
+      process.exit(0);
+    } catch {
+      return false;
+    }
+  }
+
+  if (!check()) {
+    const timer = setInterval(() => {
+      check();
+    }, POLL_INTERVAL_MS);
   }
 }
 
 // -----------------------------------------------------------------------------
 // CLI Dispatcher
 // -----------------------------------------------------------------------------
-const command = args[0];
+const SUBCOMMANDS = new Set(['scan', 'start', 'modify', 'render', 'listen']);
 
-if (!command || command === '--help' || command === '-h') {
+const cmdIdx = args.findIndex((a) => SUBCOMMANDS.has(a));
+
+if (cmdIdx !== -1) {
+  const command = args[cmdIdx];
+  const subArgs = args.filter((_, i) => i !== cmdIdx);
+  switch (command) {
+    case 'scan':
+      handleScan(subArgs);
+      break;
+    case 'start':
+      handleStart(subArgs);
+      break;
+    case 'modify':
+      handleModify(subArgs);
+      break;
+    case 'render':
+      handleRender(subArgs);
+      break;
+    case 'listen':
+      handleListen(subArgs);
+      break;
+  }
+} else if (!args[0] || args.includes('--help') || args.includes('-h')) {
   printHelp();
   process.exit(0);
-}
-
-if (command === '--version' || command === '-v') {
+} else if (args.includes('--version') || args.includes('-v')) {
   const pkg = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../package.json'), 'utf8'));
   console.log(`visual-ui v${pkg.version || '1.0.0'}`);
   process.exit(0);
-}
-
-switch (command) {
-  case 'scan':
-    handleScan(args.slice(1));
-    break;
-  case 'start':
-    handleStart(args.slice(1));
-    break;
-  case 'modify':
-    handleModify(args.slice(1));
-    break;
-  case 'render':
-    handleRender(args.slice(1));
-    break;
-  default:
-    console.error(`Error: Unknown command "${command}". Run "visual-ui --help" for available commands.`);
-    process.exit(1);
+} else {
+  console.error(`Error: Unknown command "${args[0]}". Run "visual-ui --help" for available commands.`);
+  process.exit(1);
 }

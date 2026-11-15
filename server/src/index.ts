@@ -3,7 +3,11 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs';
-import workspaceRoutes from './routes/workspaceRoutes';
+import workspaceRoutes, {
+  handleCanvasEvents,
+  handleBridgeSelect,
+  handleBridgeStatus,
+} from './routes/workspaceRoutes';
 import aiRoutes from './routes/aiRoutes';
 
 dotenv.config();
@@ -12,7 +16,27 @@ const app = express();
 const PORT = process.env.PORT || 3838;
 
 // Middleware
-app.use(cors({ origin: '*' }));
+// Restrict CORS to localhost origins (http://localhost:*, http://127.0.0.1:*) while allowing local development ports
+const allowedOriginRegexes = [
+  /^https?:\/\/localhost(:\d+)?$/,
+  /^https?:\/\/127\.0\.0\.1(:\d+)?$/,
+];
+
+app.use(
+  cors({
+    origin: allowedOriginRegexes,
+    credentials: true,
+  })
+);
+
+// Fallback for requests without Origin header (e.g. server-to-server or test runners)
+app.use((req: Request, res: Response, next: NextFunction) => {
+  if (!req.headers.origin && !res.getHeader('Access-Control-Allow-Origin')) {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+  }
+  next();
+});
+
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
@@ -65,6 +89,11 @@ app.get('/api/health', (req: Request, res: Response) => {
 });
 
 // Mount Routes: Workspace (plus project and component aliases), Canvas, and AI
+app.get('/api/canvas/events', handleCanvasEvents);
+app.post('/api/bridge/select', handleBridgeSelect);
+app.post('/__agy_ui_bridge/select', handleBridgeSelect);
+app.get('/api/bridge/status', handleBridgeStatus);
+app.get('/__agy_ui_bridge/status', handleBridgeStatus);
 app.use('/api', workspaceRoutes);
 app.use('/api/workspace', workspaceRoutes);
 app.use('/api/project', workspaceRoutes);

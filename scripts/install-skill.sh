@@ -25,6 +25,12 @@ mkdir -p "${BIN_DEST}"
 echo "-> Copying skill definition to ${SKILL_DEST}..."
 cp -r "${ROOT_DIR}/skills/visual-ui/"* "${SKILL_DEST}/"
 
+# Also sync to repo's .agents/skills/visual-ui if directory exists
+if [ -d "${ROOT_DIR}/.agents/skills/visual-ui" ]; then
+  echo "-> Syncing skill definition to ${ROOT_DIR}/.agents/skills/visual-ui..."
+  cp -r "${ROOT_DIR}/skills/visual-ui/"* "${ROOT_DIR}/.agents/skills/visual-ui/"
+fi
+
 # 3. Create symlink to bin/visual-ui.js in ~/.local/bin/visual-ui
 chmod +x "${ROOT_DIR}/bin/visual-ui.js"
 echo "-> Creating symlink in ~/.local/bin/visual-ui..."

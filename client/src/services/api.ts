@@ -182,4 +182,52 @@ export const api = {
     }
     return data;
   },
+
+  /**
+   * Post a UI element selection to the bridge queue so a listening CLI agent
+   * can pick it up and apply the requested change in the same session.
+   * Writes atomically to .ui-feedback/queue/<id>.json via the server.
+   */
+  async bridgeSelect(payload: {
+    element: {
+      selector: string;
+      tagName?: string;
+      componentHint?: string;
+      filePath?: string;
+      outerHTMLSnippet?: string;
+    };
+    instruction: string;
+    status?: 'pending' | 'done';
+  }): Promise<{ success: boolean; queued?: string }> {
+    const res = await fetch(`${BASE_URL}/bridge/select`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({ success: false }));
+    return data;
+  },
+
+  /**
+   * Get the current bridge session status (whether a CLI agent is listening).
+   */
+  async bridgeStatus(): Promise<{ active: boolean; pendingCount?: number }> {
+    const res = await fetch(`${BASE_URL}/bridge/status`);
+    const data = await res.json().catch(() => ({ active: false }));
+    return data;
+  },
+
+  /**
+   * Signal the CLI agent that the session is done (status: 'done').
+   * Removes the session lock and allows the Stop hook to proceed.
+   */
+  async bridgeDone(): Promise<{ success: boolean }> {
+    const res = await fetch(`${BASE_URL}/bridge/select`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'done', element: { selector: '__done__' }, instruction: '' }),
+    });
+    const data = await res.json().catch(() => ({ success: false }));
+    return data;
+  },
 };

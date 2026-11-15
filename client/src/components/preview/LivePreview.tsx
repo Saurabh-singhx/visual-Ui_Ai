@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Smartphone,
   Tablet,
@@ -24,23 +24,131 @@ interface LivePreviewProps {
   onApplyPatch: () => void;
   canApplyPatch: boolean;
   onClosePreview?: () => void;
+  synthesizedProps?: Record<string, any>;
+  isSkillMode?: boolean;
+  targetDevice?: 'mobile' | 'tablet' | 'desktop' | null;
+}
+
+/**
+ * Converts Framer Motion tags (motion.div, motion.button, etc.) and interaction props
+ * (whileHover, whileTap) into standard HTML tags with Tailwind transition classes.
+ */
+function convertFramerMotionToTailwind(jsx: string): string {
+  let result = jsx.replace(/import\s+(?:(?!import)[\s\S])*?\s+from\s+['"]framer-motion['"];?/g, '');
+
+  // Tag matcher for motion opening tags: <motion.div ...> or <motion.button ...>
+  result = result.replace(/<motion\.([a-zA-Z0-9]+)\b([^>]*?)(\/?)>/g, (_match, tagName, rawAttrs, selfClosing) => {
+    let attrs = rawAttrs;
+    const classesToAdd: string[] = [];
+
+    // Extract whileHover scale or elevation
+    const hoverScaleMatch = attrs.match(/whileHover\s*=\s*\{\{\s*[^}]*?scale\s*:\s*([0-9.]+)[^}]*?\}\}/i);
+    if (hoverScaleMatch) {
+      const scaleVal = parseFloat(hoverScaleMatch[1]);
+      if (scaleVal >= 1.08) classesToAdd.push('hover:scale-110');
+      else if (scaleVal >= 1.04) classesToAdd.push('hover:scale-105');
+      else if (scaleVal > 1.0) classesToAdd.push('hover:scale-105');
+      else if (scaleVal <= 0.96) classesToAdd.push('hover:scale-95');
+      else classesToAdd.push('hover:scale-105');
+    } else if (/whileHover/i.test(attrs)) {
+      classesToAdd.push('hover:scale-105');
+    }
+
+    // Extract whileTap scale
+    const tapScaleMatch = attrs.match(/whileTap\s*=\s*\{\{\s*[^}]*?scale\s*:\s*([0-9.]+)[^}]*?\}\}/i);
+    if (tapScaleMatch) {
+      const scaleVal = parseFloat(tapScaleMatch[1]);
+      if (scaleVal <= 0.92) classesToAdd.push('active:scale-90');
+      else if (scaleVal <= 0.96) classesToAdd.push('active:scale-95');
+      else classesToAdd.push('active:scale-95');
+    } else if (/whileTap/i.test(attrs)) {
+      classesToAdd.push('active:scale-95');
+    }
+
+    // If motion interaction is present, ensure transitions exist
+    if (classesToAdd.length > 0 || /transition\s*=/i.test(attrs)) {
+      if (!attrs.includes('transition')) {
+        classesToAdd.unshift('transition-all', 'duration-300', 'ease-in-out');
+      }
+    }
+
+    // Strip motion props with balanced brace stripping
+    const motionPropNames = [
+      'whileHover',
+      'whileTap',
+      'whileFocus',
+      'whileDrag',
+      'whileInView',
+      'initial',
+      'animate',
+      'exit',
+      'transition',
+      'variants',
+      'layoutId',
+      'layout',
+    ];
+
+    for (const prop of motionPropNames) {
+      const propRegex = new RegExp(`\\s+${prop}\\s*=\\s*(?:\\{\\{[\\s\\S]*?\\}\\}|\\{[\\s\\S]*?\\}|"[^"]*"|'[^']*')`, 'g');
+      attrs = attrs.replace(propRegex, '');
+    }
+
+    // Merge extracted classes into class or className
+    if (classesToAdd.length > 0) {
+      const classMatch = attrs.match(/\b(class(?:Name)?)=["']([^"']*)["']/i);
+      if (classMatch) {
+        const attrName = classMatch[1];
+        const existing = classMatch[2].trim().split(/\s+/).filter(Boolean);
+        for (const cls of classesToAdd) {
+          if (!existing.includes(cls)) existing.push(cls);
+        }
+        attrs = attrs.replace(/\bclass(?:Name)?=["'][^"']*["']/i, `${attrName}="${existing.join(' ')}"`);
+      } else {
+        attrs = ` className="${classesToAdd.join(' ')}"${attrs}`;
+      }
+    }
+
+    return `<${tagName}${attrs}${selfClosing ? ' /' : ''}>`;
+  });
+
+  // Convert motion closing tags
+  result = result.replace(/<\/motion\.([a-zA-Z0-9]+)>/g, '</$1>');
+
+  return result;
 }
 
 /**
  * Extracts renderable markup from React JSX component code
  */
-export function extractRenderableHtml(code: string, componentName?: string): string {
+export function extractRenderableHtml(
+  code: string,
+  componentNameOrProps?: string | Record<string, any>,
+  synthesizedProps?: Record<string, any>
+): string {
   if (!code) return '<div class="p-4 text-slate-400">No code generated yet.</div>';
 
+  let componentName: string | undefined = undefined;
+  let effectiveProps: Record<string, any> | undefined = synthesizedProps;
+
+  if (typeof componentNameOrProps === 'object' && componentNameOrProps !== null) {
+    effectiveProps = componentNameOrProps;
+    componentName = undefined;
+  } else if (typeof componentNameOrProps === 'string') {
+    componentName = componentNameOrProps;
+  }
+
+  // Pre-process: convert Framer Motion motion.div and hover props to Tailwind transition classes
+  let processedCode = convertFramerMotionToTailwind(code);
+
   // If code is pure HTML
-  if (code.trim().startsWith('<') && !code.includes('import ') && !code.includes('export ')) {
-    return code;
+  if (processedCode.trim().startsWith('<') && !processedCode.includes('import ') && !processedCode.includes('export ')) {
+    return processedCode;
   }
 
   // Derive component name fallback
   let derivedName = componentName || '';
   if (!derivedName) {
-    const compNameMatch = code.match(/(?:export\s+(?:default\s+)?(?:const|function|class)\s+|function\s+)([A-Z][A-Za-z0-9_]*)/);
+    const compNameMatch = processedCode.match(/(?:export\s+(?:default\s+)?(?:const|function|class)\s+|function\s+)([A-Z][A-Za-z0-9_]*)/);
     if (compNameMatch && compNameMatch[1]) {
       derivedName = compNameMatch[1];
     }
@@ -50,9 +158,9 @@ export function extractRenderableHtml(code: string, componentName?: string): str
   const propDefaults: Record<string, string> = {};
 
   const paramMatch =
-    code.match(/(?:const|function)\s+[A-Za-z0-9_]+\s*(?::\s*[^=]+)?\s*=\s*\(\s*\{([\s\S]*?)\}\s*\)/) ||
-    code.match(/function\s+[A-Za-z0-9_]+\s*\(\s*\{([\s\S]*?)\}\s*\)/) ||
-    code.match(/\(\s*\{([\s\S]*?)\}\s*:\s*[A-Za-z0-9_]+\s*\)\s*=>/);
+    processedCode.match(/(?:const|function)\s+[A-Za-z0-9_]+\s*(?::\s*[^=]+)?\s*=\s*\(\s*\{([\s\S]*?)\}\s*\)/) ||
+    processedCode.match(/function\s+[A-Za-z0-9_]+\s*\(\s*\{([\s\S]*?)\}\s*\)/) ||
+    processedCode.match(/\(\s*\{([\s\S]*?)\}\s*:\s*[A-Za-z0-9_]+\s*\)\s*=>/);
 
   if (paramMatch) {
     const paramsBlock = paramMatch[1];
@@ -70,9 +178,18 @@ export function extractRenderableHtml(code: string, componentName?: string): str
     }
   }
 
+  // Merge synthesized props over signature defaults
+  if (effectiveProps && typeof effectiveProps === 'object') {
+    for (const [k, v] of Object.entries(effectiveProps)) {
+      if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
+        propDefaults[k] = String(v);
+      }
+    }
+  }
+
   // Extract content inside return (...) or => (...) using balanced parenthesis tracking
   let jsxSnippet = '';
-  const returnStartMatch = code.match(/(?:return\s*\(|=>\s*\()\s*([\s\S]*)/);
+  const returnStartMatch = processedCode.match(/(?:return\s*\(|=>\s*\()\s*([\s\S]*)/);
   if (returnStartMatch) {
     let depth = 1;
     const str = returnStartMatch[1];
@@ -91,14 +208,14 @@ export function extractRenderableHtml(code: string, componentName?: string): str
 
   // Fallback to direct return <tag> or outermost JSX tag
   if (!jsxSnippet) {
-    const returnDirect = code.match(/return\s+(<[a-zA-Z][\s\S]*?>[\s\S]*<\/[a-zA-Z0-9]+>);?/);
-    const arrowDirect = code.match(/=>\s*(<[a-zA-Z][\s\S]*?>[\s\S]*<\/[a-zA-Z0-9]+>);?/);
-    const firstTag = code.match(/<([a-zA-Z][a-zA-Z0-9]*)\b[\s\S]*<\/\1>/);
+    const returnDirect = processedCode.match(/return\s+(<[a-zA-Z][\s\S]*?>[\s\S]*<\/[a-zA-Z0-9]+>);?/);
+    const arrowDirect = processedCode.match(/=>\s*(<[a-zA-Z][\s\S]*?>[\s\S]*<\/[a-zA-Z0-9]+>);?/);
+    const firstTag = processedCode.match(/<([a-zA-Z][a-zA-Z0-9]*)\b[\s\S]*<\/\1>/);
 
     if (returnDirect) jsxSnippet = returnDirect[1];
     else if (arrowDirect) jsxSnippet = arrowDirect[1];
     else if (firstTag) jsxSnippet = firstTag[0];
-    else jsxSnippet = code;
+    else jsxSnippet = processedCode;
   }
 
   // Clean JSX syntax for browser rendering
@@ -123,6 +240,19 @@ export function extractRenderableHtml(code: string, componentName?: string): str
   });
 
   // Evaluate simple conditional rendering: {isOpen && (<div ...>)} or {showIcon && <span ...>}
+  if (effectiveProps) {
+    for (const [key, val] of Object.entries(effectiveProps)) {
+      if (typeof val === 'boolean') {
+        if (val) {
+          html = html.replace(new RegExp(`\\{(?:props\\.)?${key}\\s*&&\\s*\\(([\\s\\S]*?)\\)\\}`, 'g'), '$1');
+          html = html.replace(new RegExp(`\\{(?:props\\.)?${key}\\s*&&\\s*(<[a-zA-Z][\\s\\S]*?>[\\s\\S]*?<\\/[a-zA-Z0-9]+>)\\}`, 'g'), '$1');
+        } else {
+          html = html.replace(new RegExp(`\\{(?:props\\.)?${key}\\s*&&\\s*\\([\\s\\S]*?\\)\\}`, 'g'), '');
+          html = html.replace(new RegExp(`\\{(?:props\\.)?${key}\\s*&&\\s*<[a-zA-Z][\\s\\S]*?>[\\s\\S]*?<\\/[a-zA-Z0-9]+>\\}`, 'g'), '');
+        }
+      }
+    }
+  }
   html = html.replace(/\{[a-zA-Z0-9_.!?\s=><'"]+&&\s*\(([\s\S]*?)\)\}/g, '$1');
   html = html.replace(/\{[a-zA-Z0-9_.!?\s=><'"]+&&\s*(<[a-zA-Z][\s\S]*?>[\s\S]*?<\/[a-zA-Z0-9]+>)\}/g, '$1');
 
@@ -133,7 +263,24 @@ export function extractRenderableHtml(code: string, componentName?: string): str
   // Evaluate simple map expressions: {items.map(...) => (<li>...</li>)} -> render sample
   html = html.replace(/\{[a-zA-Z0-9_.]+\.map\([^)]*\)\s*=>\s*\(([\s\S]*?)\)\}/g, '$1');
 
-  // Replace component's explicit default prop interpolations
+  // Interpolate object and array synthesized props
+  if (effectiveProps && typeof effectiveProps === 'object') {
+    for (const [key, val] of Object.entries(effectiveProps)) {
+      if (val && typeof val === 'object' && !Array.isArray(val)) {
+        for (const [subKey, subVal] of Object.entries(val)) {
+          if (typeof subVal === 'string' || typeof subVal === 'number' || typeof subVal === 'boolean') {
+            const subRegex = new RegExp(`\\{(?:props\\.)?${key}(?:\\?)?\\.${subKey}(?:\\s*\\|\\|\\s*["'][^"']*["'])?\\}`, 'g');
+            html = html.replace(subRegex, String(subVal));
+          }
+        }
+      } else if (Array.isArray(val)) {
+        const lenRegex = new RegExp(`\\{(?:props\\.)?${key}(?:\\?)?\\.length\\}`, 'g');
+        html = html.replace(lenRegex, String(val.length));
+      }
+    }
+  }
+
+  // Replace component's explicit default & synthesized prop interpolations
   for (const [key, val] of Object.entries(propDefaults)) {
     const propRegex = new RegExp(`\\{(?:props\\.)?${key}(?:\\s*\\|\\|\\s*["'][^"']*["'])?\\}`, 'g');
     html = html.replace(propRegex, val);
@@ -201,8 +348,23 @@ export const LivePreview: React.FC<LivePreviewProps> = ({
   onApplyPatch,
   canApplyPatch,
   onClosePreview,
+  synthesizedProps,
+  isSkillMode = false,
+  targetDevice = null,
 }) => {
-  const [viewport, setViewport] = useState<'desktop' | 'tablet' | 'mobile'>('desktop');
+  const [viewport, setViewport] = useState<'desktop' | 'tablet' | 'mobile'>(() => {
+    if (isSkillMode && targetDevice) {
+      return targetDevice;
+    }
+    return 'desktop';
+  });
+
+  useEffect(() => {
+    if (isSkillMode && targetDevice) {
+      setViewport(targetDevice);
+    }
+  }, [isSkillMode, targetDevice]);
+
   const [activeTab, setActiveTab] = useState<'preview' | 'code' | 'diff'>('preview');
   const [copied, setCopied] = useState<boolean>(false);
   const [sandboxKey, setSandboxKey] = useState<number>(0);
@@ -223,7 +385,7 @@ export const LivePreview: React.FC<LivePreviewProps> = ({
 
   // Compile full standalone HTML with Tailwind CDN
   const sandboxedHtml = useMemo(() => {
-    const componentHtml = extractRenderableHtml(redesignedCode);
+    const componentHtml = extractRenderableHtml(redesignedCode, undefined, synthesizedProps);
 
     return `<!DOCTYPE html>
 <html class="dark">
@@ -238,8 +400,14 @@ export const LivePreview: React.FC<LivePreviewProps> = ({
         extend: {
           colors: {
             studio: {
-              900: '#0f172a',
-              950: '#020617',
+              900: '#121212',
+              925: '#0d0d0d',
+              950: '#000000',
+            },
+            brand: {
+              primary: '#ea580c',
+              hover: '#f97316',
+              accent: '#ff6600',
             }
           }
         }
@@ -249,7 +417,7 @@ export const LivePreview: React.FC<LivePreviewProps> = ({
   <style>
     body {
       background-color: transparent;
-      color: #f8fafc;
+      color: #ffffff;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       margin: 0;
       padding: 24px;
@@ -270,18 +438,28 @@ export const LivePreview: React.FC<LivePreviewProps> = ({
 </html>`;
   }, [redesignedCode, sandboxKey]);
 
+  const viewports = [
+    { id: 'mobile' as const, icon: Smartphone, title: 'Mobile 375px' },
+    { id: 'tablet' as const, icon: Tablet, title: 'Tablet 768px' },
+    { id: 'desktop' as const, icon: Monitor, title: 'Desktop 100%' },
+  ];
+
+  const visibleViewports = isSkillMode && targetDevice
+    ? viewports.filter((v) => v.id === targetDevice)
+    : viewports;
+
   return (
-    <div className="h-full flex flex-col bg-studio-950 border-t lg:border-t-0 lg:border-l border-studio-800 select-none">
+    <div className="h-full flex flex-col bg-black border-t lg:border-t-0 lg:border-l border-white/10 select-none">
       {/* Top Bar */}
-      <div className="h-10 bg-studio-900/80 border-b border-studio-800 px-4 flex items-center justify-between text-xs">
+      <div className="h-10 bg-[#0d0d0d] border-b border-white/15 px-3 sm:px-4 flex items-center justify-between text-xs overflow-x-auto scrollbar-none">
         {/* Tabs */}
-        <div className="flex items-center gap-1 bg-studio-950 p-0.5 rounded-lg border border-studio-800">
+        <div className="flex items-center gap-1 bg-black p-0.5 rounded-lg border border-white/15">
           <button
             onClick={() => setActiveTab('preview')}
             className={`flex items-center gap-1 px-2.5 py-1 rounded text-xs transition-colors ${
               activeTab === 'preview'
-                ? 'bg-indigo-600 text-white font-medium shadow-sm'
-                : 'text-studio-400 hover:text-white'
+                ? 'bg-orange-600 text-white font-medium shadow-sm'
+                : 'text-zinc-400 hover:text-white'
             }`}
           >
             <Eye className="w-3.5 h-3.5" />
@@ -292,8 +470,8 @@ export const LivePreview: React.FC<LivePreviewProps> = ({
             onClick={() => setActiveTab('code')}
             className={`flex items-center gap-1 px-2.5 py-1 rounded text-xs transition-colors ${
               activeTab === 'code'
-                ? 'bg-indigo-600 text-white font-medium shadow-sm'
-                : 'text-studio-400 hover:text-white'
+                ? 'bg-orange-600 text-white font-medium shadow-sm'
+                : 'text-zinc-400 hover:text-white'
             }`}
           >
             <Code2 className="w-3.5 h-3.5" />
@@ -304,8 +482,8 @@ export const LivePreview: React.FC<LivePreviewProps> = ({
             onClick={() => setActiveTab('diff')}
             className={`flex items-center gap-1 px-2.5 py-1 rounded text-xs transition-colors ${
               activeTab === 'diff'
-                ? 'bg-indigo-600 text-white font-medium shadow-sm'
-                : 'text-studio-400 hover:text-white'
+                ? 'bg-orange-600 text-white font-medium shadow-sm'
+                : 'text-zinc-400 hover:text-white'
             }`}
           >
             <GitCommit className="w-3.5 h-3.5" />
@@ -319,47 +497,35 @@ export const LivePreview: React.FC<LivePreviewProps> = ({
             <>
               <button
                 onClick={() => setSandboxKey((k) => k + 1)}
-                className="p-1 text-studio-400 hover:text-white rounded hover:bg-studio-800"
+                className="p-1 text-zinc-400 hover:text-white rounded hover:bg-zinc-800"
                 title="Reload Sandbox"
               >
                 <RefreshCw className="w-3.5 h-3.5" />
               </button>
 
-              <div className="flex items-center bg-studio-950 rounded-lg p-0.5 border border-studio-800">
-                <button
-                  onClick={() => setViewport('mobile')}
-                  className={`p-1 rounded ${
-                    viewport === 'mobile' ? 'bg-studio-800 text-white' : 'text-studio-400 hover:text-white'
-                  }`}
-                  title="Mobile 375px"
-                >
-                  <Smartphone className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  onClick={() => setViewport('tablet')}
-                  className={`p-1 rounded ${
-                    viewport === 'tablet' ? 'bg-studio-800 text-white' : 'text-studio-400 hover:text-white'
-                  }`}
-                  title="Tablet 768px"
-                >
-                  <Tablet className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  onClick={() => setViewport('desktop')}
-                  className={`p-1 rounded ${
-                    viewport === 'desktop' ? 'bg-studio-800 text-white' : 'text-studio-400 hover:text-white'
-                  }`}
-                  title="Desktop 100%"
-                >
-                  <Monitor className="w-3.5 h-3.5" />
-                </button>
+              <div className="flex items-center bg-black rounded-lg p-0.5 border border-white/15">
+                {visibleViewports.map((v) => {
+                  const Icon = v.icon;
+                  return (
+                    <button
+                      key={v.id}
+                      onClick={() => setViewport(v.id)}
+                      className={`p-1 rounded ${
+                        viewport === v.id ? 'bg-orange-600 text-white' : 'text-zinc-400 hover:text-white'
+                      }`}
+                      title={v.title}
+                    >
+                      <Icon className="w-3.5 h-3.5" />
+                    </button>
+                  );
+                })}
               </div>
             </>
           )}
 
           <button
             onClick={copyCode}
-            className="flex items-center gap-1 px-2 py-1 bg-studio-800 hover:bg-studio-700 text-studio-300 hover:text-white rounded text-xs border border-studio-700 transition-colors"
+            className="flex items-center gap-1 px-2 py-1 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white rounded text-xs border border-white/15 transition-colors"
             title="Copy component code"
           >
             {copied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
@@ -369,7 +535,7 @@ export const LivePreview: React.FC<LivePreviewProps> = ({
           {canApplyPatch && (
             <button
               onClick={onApplyPatch}
-              className="flex items-center gap-1.5 px-3 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-semibold shadow shadow-indigo-600/30 transition-all"
+              className="flex items-center gap-1.5 px-3 py-1 bg-orange-600 hover:bg-orange-500 text-white rounded-lg text-xs font-semibold shadow shadow-orange-600/30 transition-all"
             >
               <Sparkles className="w-3.5 h-3.5" />
               <span>Apply Patch</span>
@@ -379,7 +545,7 @@ export const LivePreview: React.FC<LivePreviewProps> = ({
           {onClosePreview && (
             <button
               onClick={onClosePreview}
-              className="p-1 text-studio-400 hover:text-white rounded hover:bg-studio-800 transition-colors ml-1"
+              className="p-1 text-zinc-400 hover:text-white rounded hover:bg-zinc-800 transition-colors ml-1"
               title="Close Preview"
             >
               <X className="w-3.5 h-3.5" />
@@ -393,8 +559,8 @@ export const LivePreview: React.FC<LivePreviewProps> = ({
         {activeTab === 'preview' && (
           <div className={`w-full h-full flex items-center justify-center ${getViewportWidth()} transition-all duration-300`}>
             {/* Dynamic Iframe Sandbox */}
-            <div className="w-full h-full max-h-[600px] rounded-2xl overflow-hidden border border-studio-800 bg-studio-950/80 shadow-2xl relative flex flex-col">
-              <div className="h-7 bg-studio-900 border-b border-studio-800 px-3 flex items-center justify-between text-[11px] text-studio-400">
+            <div className="w-full h-full max-h-[600px] rounded-2xl overflow-hidden border border-white/15 bg-black/80 shadow-2xl relative flex flex-col">
+              <div className="h-7 bg-[#0d0d0d] border-b border-white/15 px-3 flex items-center justify-between text-[11px] text-zinc-400">
                 <span className="flex items-center gap-1.5">
                   <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" />
                   <span>Dynamic Tailwind Sandbox</span>
@@ -408,7 +574,7 @@ export const LivePreview: React.FC<LivePreviewProps> = ({
                 srcDoc={sandboxedHtml}
                 title="Component Sandbox"
                 sandbox="allow-scripts"
-                className="w-full flex-1 border-0 bg-slate-950/90"
+                className="w-full flex-1 border-0 bg-black/90"
               />
             </div>
           </div>
@@ -428,7 +594,7 @@ export const LivePreview: React.FC<LivePreviewProps> = ({
 
         {activeTab === 'diff' && (
           <div className="w-full h-full flex flex-col">
-            <div className="flex-1 bg-studio-900/90 rounded-xl border border-studio-800 overflow-auto font-mono text-xs select-text">
+            <div className="flex-1 bg-black rounded-xl border border-white/10 overflow-auto font-mono text-xs select-text">
               <table className="w-full border-collapse">
                 <tbody>
                   {diff.lines.map((line, idx) => (
@@ -439,10 +605,10 @@ export const LivePreview: React.FC<LivePreviewProps> = ({
                           ? 'bg-emerald-500/15 text-emerald-300'
                           : line.type === 'deletion'
                           ? 'bg-rose-500/15 text-rose-300 line-through'
-                          : 'text-studio-400'
+                          : 'text-zinc-400'
                       }
                     >
-                      <td className="w-10 px-2 py-0.5 text-right text-studio-600 select-none border-r border-studio-800 text-[10px]">
+                      <td className="w-10 px-2 py-0.5 text-right text-zinc-600 select-none border-r border-white/10 text-[10px]">
                         {line.type === 'addition' ? '+' : line.type === 'deletion' ? '-' : line.newLineNumber}
                       </td>
                       <td className="px-3 py-0.5 whitespace-pre font-mono">{line.text}</td>

@@ -2,61 +2,12 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import React from 'react';
 import App from './App';
+import { VisualCanvas } from './components/canvas/VisualCanvas';
 import { api } from './services/api';
 
 // Mock API calls
 vi.mock('./services/api', () => ({
   api: {
-    getSamples: vi.fn().mockResolvedValue([
-      {
-        id: 'web-landing',
-        platform: 'web',
-        name: 'Modern SaaS Landing Page',
-        viewport: { width: 1200, height: 750 },
-        description: 'Web application mockup',
-        interactiveElements: [
-          {
-            id: 'elem-1',
-            name: 'Header Nav',
-            selector: 'header.nav',
-            bounds: { x: 0, y: 0, width: 1200, height: 60 },
-            tagName: 'nav',
-            className: 'bg-white p-4',
-            codeSnippet: '<nav>Header</nav>',
-            styles: { backgroundColor: '#ffffff', textColor: '#000000' },
-          },
-        ],
-      },
-      {
-        id: 'desktop-admin',
-        platform: 'desktop',
-        name: 'Analytics Desktop Dashboard',
-        viewport: { width: 1280, height: 800 },
-        description: 'Desktop dashboard mockup',
-        interactiveElements: [
-          {
-            id: 'desktop-elem-widget',
-            name: 'Active Server Metric Widget',
-            selector: 'QWidget#metricWidget',
-            bounds: { x: 260, y: 110, width: 320, height: 150 },
-            tagName: 'QWidget',
-            className: 'bg-slate-800 rounded-lg p-4 border border-slate-700',
-            codeSnippet: 'export const MetricWidget = () => <div>CPU: 42.8%</div>;',
-            styles: { backgroundColor: '#1e293b', textColor: '#34d399' },
-          },
-          {
-            id: 'desktop-elem-sidebar',
-            name: 'Left Sidebar Navigation',
-            selector: 'aside.sidebar',
-            bounds: { x: 24, y: 60, width: 210, height: 710 },
-            tagName: 'aside',
-            className: 'bg-slate-900/60 p-3',
-            codeSnippet: 'export const DesktopSidebar = () => <aside>Dashboard</aside>;',
-            styles: { backgroundColor: '#0f172a', textColor: '#94a3b8' },
-          },
-        ],
-      },
-    ]),
     getAiProviders: vi.fn().mockResolvedValue({
       providers: { localEngine: true, activeDefault: 'Smart Local UI Engine' },
     }),
@@ -70,6 +21,8 @@ vi.mock('./services/api', () => ({
       success: true,
       platform: 'linux',
       sampleWorkspacePath: '/sample-workspace',
+      detectedPlatform: 'web',
+      detectedFramework: 'react',
     }),
     getWorkspaceApp: vi.fn().mockImplementation((dirPath: string) =>
       Promise.resolve({
@@ -85,10 +38,11 @@ vi.mock('./services/api', () => ({
             selector: 'nav.navbar',
             bounds: { x: 40, y: 24, width: 1120, height: 68 },
             tagName: 'nav',
-            className: 'bg-indigo-900 px-6 py-4',
-            codeSnippet: '<nav className="bg-indigo-900 px-6 py-4">Workspace Navigation</nav>',
+            className: 'bg-zinc-900 px-6 py-4',
+            codeSnippet: '<nav className="bg-zinc-900 px-6 py-4">Workspace Navigation</nav>',
             filePath: `${dirPath}/WorkspaceNav.tsx`,
             relativePath: 'WorkspaceNav.tsx',
+            styles: { backgroundColor: '#18181b', textColor: '#ffffff' },
           },
           {
             id: 'ws-card',
@@ -96,16 +50,22 @@ vi.mock('./services/api', () => ({
             selector: 'div.card',
             bounds: { x: 40, y: 116, width: 350, height: 230 },
             tagName: 'div',
-            className: 'p-4 bg-slate-800 rounded-xl',
-            codeSnippet: '<div className="p-4 bg-slate-800 rounded-xl">Real Searched Component</div>',
+            className: 'p-4 bg-zinc-900 rounded-xl',
+            codeSnippet: '<div className="p-4 bg-zinc-900 rounded-xl">Real Searched Component</div>',
             filePath: `${dirPath}/WorkspaceCard.tsx`,
             relativePath: 'WorkspaceCard.tsx',
+            styles: { backgroundColor: '#18181b', textColor: '#ffffff' },
           },
         ],
         isWorkspace: true,
         workspacePath: dirPath,
       })
     ),
+    getCanvasState: vi.fn().mockResolvedValue({
+      success: true,
+      activeComponent: null,
+      timestamp: Date.now(),
+    }),
     getAdbDevices: vi.fn().mockResolvedValue([]),
   },
 }));
@@ -191,9 +151,9 @@ describe('App Component', () => {
       fireEvent.click(desktopTab);
     });
 
-    // Check that Desktop Dashboard is active
-    expect(screen.getByText('Analytics Desktop Dashboard')).toBeInTheDocument();
-    expect(screen.getByText('Active Server Metric Widget')).toBeInTheDocument();
+    // Check that workspace component is active on Desktop
+    expect(screen.getAllByText('Workspace: test-workspace').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('WorkspaceNav').length).toBeGreaterThan(0);
 
     // Verify Fit to Screen button is available in canvas zoom toolbar
     expect(screen.getByTitle(/Fit canvas to screen/i)).toBeInTheDocument();
@@ -202,7 +162,7 @@ describe('App Component', () => {
     expect(screen.getByText('Component Code')).toBeInTheDocument();
   });
 
-  it('selects sidebar UI in dashboard and updates inspector with code match', async () => {
+  it('selects secondary workspace UI and updates inspector with code match', async () => {
     await act(async () => {
       render(<App />);
     });
@@ -212,13 +172,20 @@ describe('App Component', () => {
       fireEvent.click(desktopTab);
     });
 
-    // Initially, Active Server Metric Widget is selected
-    expect(screen.getByText('Active Server Metric Widget')).toBeInTheDocument();
+    // Initially, WorkspaceNav is selected
+    expect(screen.getAllByText('WorkspaceNav').length).toBeGreaterThan(0);
 
-    // Click on sidebar navigation item in dashboard
-    const nodesItem = screen.getByText('Nodes & Pods');
+    // Switch to Grid view to reveal all workspace components
+    const gridBtn = screen.getByRole('button', { name: 'Grid' });
     await act(async () => {
-      fireEvent.click(nodesItem);
+      fireEvent.click(gridBtn);
+    });
+
+    // Click on second component (WorkspaceCard)
+    const cardElements = screen.getAllByText(/WorkspaceCard/i);
+    expect(cardElements.length).toBeGreaterThan(0);
+    await act(async () => {
+      fireEvent.click(cardElements[0]);
     });
 
     // Inspector is active with WCAG audit and tokens
@@ -236,11 +203,11 @@ describe('App Component', () => {
       fireEvent.click(desktopTab);
     });
 
-    // Click on simulated text element in the dashboard mockup
-    const metricTexts = screen.getAllByText(/CPU Usage/i);
-    expect(metricTexts.length).toBeGreaterThan(0);
+    // Click on rendered workspace text inside dynamic canvas component
+    const navText = screen.getByText('Workspace Navigation');
+    expect(navText).toBeInTheDocument();
     await act(async () => {
-      fireEvent.click(metricTexts[0]);
+      fireEvent.click(navText);
     });
 
     // Expect inspector and canvas to be active and populated
@@ -267,5 +234,73 @@ describe('App Component', () => {
     });
 
     expect(screen.getByText('Workspace')).toBeInTheDocument();
+  });
+
+  it('App handles malformed workspace app with omitted interactiveElements and viewport without crashing', async () => {
+    vi.mocked(api.getWorkspaceApp).mockResolvedValueOnce({
+      id: 'malformed-app',
+      name: 'Malformed Workspace App',
+      platform: 'web',
+      isWorkspace: true,
+    } as any);
+
+    await act(async () => {
+      render(<App />);
+    });
+
+    expect(screen.getByText('Visual UI-AI Studio')).toBeInTheDocument();
+    expect(screen.getAllByText('Malformed Workspace App').length).toBeGreaterThan(0);
+  });
+
+  it('VisualCanvas renders safely with undefined interactiveElements and undefined viewport', () => {
+    const malformedApp: any = {
+      id: 'malformed-canvas',
+      name: 'Adversarial Canvas App',
+      platform: 'web',
+    };
+
+    render(
+      <VisualCanvas
+        currentApp={malformedApp}
+        selectedElement={null}
+        onSelectElement={vi.fn()}
+        isSnipMode={false}
+        onSnipComplete={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('0 Live Components')).toBeInTheDocument();
+    expect(screen.getByText('1200 × 750px')).toBeInTheDocument();
+    expect(screen.getByText(/No UI components found in workspace directory/i)).toBeInTheDocument();
+  });
+
+  it('VisualCanvas handles breakpoint preset clicks when currentApp has undefined viewport', () => {
+    const malformedApp: any = {
+      id: 'malformed-canvas-presets',
+      name: 'Presets Test App',
+      platform: 'web',
+    };
+
+    render(
+      <VisualCanvas
+        currentApp={malformedApp}
+        selectedElement={null}
+        onSelectElement={vi.fn()}
+        isSnipMode={false}
+        onSnipComplete={vi.fn()}
+      />
+    );
+
+    const mobileBtn = screen.getByTitle(/Mobile Viewport/i);
+    fireEvent.click(mobileBtn);
+    expect(screen.getByText('375 × 667px')).toBeInTheDocument();
+
+    const tabletBtn = screen.getByTitle(/Tablet Viewport/i);
+    fireEvent.click(tabletBtn);
+    expect(screen.getByText('768 × 1024px')).toBeInTheDocument();
+
+    const desktopBtn = screen.getByTitle(/Desktop Viewport/i);
+    fireEvent.click(desktopBtn);
+    expect(screen.getByText('1200 × 800px')).toBeInTheDocument();
   });
 });

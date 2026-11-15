@@ -99,4 +99,59 @@ describe('extractRenderableHtml', () => {
     expect(html).toContain('✓');
     expect(html).not.toContain('<Sparkles');
   });
+
+  it('interpolates synthesized props cleanly into component preview', () => {
+    const code = `
+      export const ProfileWidget = (props: { title: string; count: number; active: boolean }) => {
+        return (
+          <div className="profile">
+            <h3>{props.title}</h3>
+            <span>Count: {props.count}</span>
+            {props.active && <div className="badge">Active Member</div>}
+          </div>
+        );
+      };
+    `;
+
+    const synthesizedProps = {
+      title: 'Synthesized Title',
+      count: 99,
+      active: true,
+    };
+
+    const html = extractRenderableHtml(code, 'ProfileWidget', synthesizedProps);
+    expect(html).toContain('Synthesized Title');
+    expect(html).toContain('Count: 99');
+    expect(html).toContain('Active Member');
+  });
+
+  it('converts Framer Motion motion.div tags and hover props to Tailwind transition classes', () => {
+    const motionCode = `
+      import { motion } from 'framer-motion';
+      export const AnimatedCard = () => {
+        return (
+          <motion.div
+            whileHover={{ scale: 1.05 }}
+            transition={{ duration: 0.3 }}
+            className="p-6 bg-slate-900 rounded-xl"
+          >
+            <motion.button whileTap={{ scale: 0.95 }} whileHover={{ scale: 1.05 }} className="btn">
+              Action
+            </motion.button>
+          </motion.div>
+        );
+      };
+    `;
+
+    const html = extractRenderableHtml(motionCode, 'AnimatedCard');
+    expect(html).not.toContain('motion.div');
+    expect(html).not.toContain('motion.button');
+    expect(html).not.toContain('whileHover');
+    expect(html).not.toContain('whileTap');
+    expect(html).toContain('<div');
+    expect(html).toContain('hover:scale-105');
+    expect(html).toContain('transition-all');
+    expect(html).toContain('<button');
+    expect(html).toContain('active:scale-95');
+  });
 });

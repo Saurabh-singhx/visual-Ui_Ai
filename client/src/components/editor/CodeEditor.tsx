@@ -117,7 +117,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
       {/* Editor Header */}
       <div className="h-10 bg-studio-900/90 border-b border-studio-800 px-3 flex items-center justify-between text-xs select-none">
         <div className="flex items-center gap-2 min-w-0">
-          <FileCode className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+          <FileCode className="w-3.5 h-3.5 text-orange-400 shrink-0" />
           <span className="font-semibold text-white truncate text-[11px]" title={filePath || title}>
             {filePath ? filePath.split('/').pop() : title || 'Component Code'}
           </span>
@@ -168,7 +168,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
             disabled={isSaving || !isDirty}
             className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-[11px] font-semibold transition-all shadow-sm ${
               isDirty && !isSaving
-                ? 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-600/30'
+                ? 'bg-orange-600 hover:bg-orange-500 text-white shadow-orange-600/30'
                 : 'bg-studio-800 text-studio-500 border border-studio-700 cursor-not-allowed'
             }`}
             title="Save & Apply to Disk (Ctrl+S / Cmd+S)"

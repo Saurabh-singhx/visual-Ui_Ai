@@ -115,6 +115,45 @@ export class AiService {
   async redesignComponent(request: RedesignRequest): Promise<RedesignResponse> {
     const prompt = request.prompt || 'Redesign this component with modern UI/UX principles';
 
+    // Default targetFramework if not specified based on file/code or workspace context
+    if (!request.targetFramework) {
+      let resolvedFramework: 'react-tailwind' | 'html-tailwind' | 'react-native' | 'vue' = 'react-tailwind';
+      const code = request.originalCode || '';
+
+      if (
+        code.includes("'react-native'") ||
+        code.includes('"react-native"') ||
+        code.includes('<SafeAreaView') ||
+        (code.includes('<View') && code.includes('<Text')) ||
+        code.includes('StyleSheet.create')
+      ) {
+        resolvedFramework = 'react-native';
+      } else if (
+        code.includes('<template') ||
+        code.includes("'vue'") ||
+        code.includes('"vue"') ||
+        code.includes('defineComponent')
+      ) {
+        resolvedFramework = 'vue';
+      } else {
+        try {
+          const { workspacePatcherService } = require('./workspacePatcherService');
+          const targetDir = process.env.WORKSPACE_DIR || workspacePatcherService.getDefaultSampleWorkspace();
+          const ctx = workspacePatcherService.detectWorkspaceProjectContext(targetDir);
+          if (ctx.detectedFramework === 'react-native' || ctx.detectedPlatform === 'mobile') {
+            resolvedFramework = 'react-native';
+          } else if (ctx.detectedFramework === 'vue') {
+            resolvedFramework = 'vue';
+          } else {
+            resolvedFramework = 'react-tailwind';
+          }
+        } catch {
+          resolvedFramework = 'react-tailwind';
+        }
+      }
+      request.targetFramework = resolvedFramework;
+    }
+
     // If an external API key is configured in env, we can try calling it
     if (process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY) {
       try {
@@ -155,6 +194,96 @@ export class AiService {
     const lowerPrompt = prompt.toLowerCase();
     const appliedChanges: string[] = [];
 
+    // Parse targeting info from elementId or prompt
+    let targetTag: string | null = null;
+    let targetLine: number | null = null;
+    let targetIdAttr: string | null = null;
+
+    if (elementId) {
+      // Check if elementId matches an exact id="..." attribute in code, e.g. id="submit-btn"
+      const idAttrRegex = new RegExp(`\\bid=["']${elementId}["']`, 'i');
+      if (idAttrRegex.test(updated)) {
+        targetIdAttr = elementId;
+      }
+
+      const parts = elementId.split('-');
+      if (parts.length >= 2 && !isNaN(parseInt(parts[parts.length - 1], 10))) {
+        targetLine = parseInt(parts[parts.length - 1], 10);
+        targetTag = parts.slice(0, parts.length - 1).join('-').toLowerCase();
+      } else if (parts.length > 0 && /^[a-zA-Z][a-zA-Z0-9]*$/.test(parts[0])) {
+        targetTag = parts[0].toLowerCase();
+      }
+    }
+
+    if (!targetTag) {
+      if (lowerPrompt.includes('button') || lowerPrompt.includes('btn') || lowerPrompt.includes('cta')) {
+        targetTag = 'button';
+      } else if (lowerPrompt.includes('heading') || lowerPrompt.includes('title')) {
+        const hMatch = updated.match(/<(h[1-6])\b/i);
+        targetTag = hMatch ? hMatch[1].toLowerCase() : 'h1';
+      } else if (lowerPrompt.includes('badge') || lowerPrompt.includes('status')) {
+        targetTag = updated.includes('<span') ? 'span' : 'div';
+      } else if (lowerPrompt.includes('card') || lowerPrompt.includes('container')) {
+        targetTag = updated.includes('<article') ? 'article' : 'div';
+      }
+    }
+
+    // Helper function to update classes on a tag string ensuring exactly one className attribute
+    const updateTagClasses = (
+      tagText: string,
+      classesToAdd: string[],
+      conflictPatterns: RegExp[] = []
+    ): string => {
+      const classMatch = tagText.match(/\bclass(?:Name)?=["']([^"']*)["']/i);
+      if (classMatch) {
+        const existingClasses = classMatch[1];
+        const merged = mergeCleanClasses(existingClasses, classesToAdd, conflictPatterns);
+        return tagText.replace(/\bclass(?:Name)?=["'][^"']*["']/i, `className="${merged}"`);
+      }
+      if (/\s*\/>$/.test(tagText)) {
+        return tagText.replace(/\s*\/>$/, ` className="${classesToAdd.join(' ')}" />`);
+      }
+      return tagText.replace(/\s*>$/, ` className="${classesToAdd.join(' ')}">`);
+    };
+
+    // Helper to find target opening tag matching targetIdAttr, targetTag and/or targetLine
+    const findTargetOpenTag = (
+      currentCode: string
+    ): { index: number; text: string; tagName: string } | null => {
+      if (targetIdAttr) {
+        const regex = new RegExp(`(<([a-zA-Z0-9_-]+)\\b[^>]*\\bid=["']${targetIdAttr}["'][^>]*>)`, 'i');
+        const m = regex.exec(currentCode);
+        if (m) {
+          return { index: m.index, text: m[1], tagName: m[2].toLowerCase() };
+        }
+      }
+
+      const effectiveTag = targetTag || (targetLine !== null ? '[a-zA-Z0-9_-]+' : null);
+      if (!effectiveTag) return null;
+
+      const openTagRegex = new RegExp(`(<(${effectiveTag})\\b[^>]*?>)`, 'gi');
+      let match: RegExpExecArray | null;
+      let chosen: { index: number; text: string; tagName: string } | null = null;
+      let minLineDiff = Infinity;
+
+      while ((match = openTagRegex.exec(currentCode)) !== null) {
+        const matchIndex = match.index;
+        const matchLine = currentCode.substring(0, matchIndex).split('\n').length;
+        if (targetLine !== null) {
+          const diff = Math.abs(matchLine - targetLine);
+          if (diff < minLineDiff) {
+            minLineDiff = diff;
+            chosen = { index: matchIndex, text: match[1], tagName: match[2].toLowerCase() };
+          }
+        } else {
+          chosen = { index: matchIndex, text: match[1], tagName: match[2].toLowerCase() };
+          break;
+        }
+      }
+
+      return chosen;
+    };
+
     // 1. Color Customization
     const colorMap: Record<string, { name: string; from: string; to: string; bg: string; hover: string; text: string; ring: string }> = {
       red: { name: 'red', from: 'from-rose-600', to: 'to-red-600', bg: 'bg-rose-600', hover: 'hover:bg-rose-500', text: 'text-rose-400', ring: 'ring-rose-400' },
@@ -183,26 +312,58 @@ export class AiService {
     }
 
     if (targetTheme) {
-      // Replace gradients and backgrounds
-      const beforeColor = updated;
-      updated = updated.replace(/from-(?:indigo|blue|emerald|rose|purple|cyan|amber|slate)-(?:500|600|700)/g, targetTheme.from);
-      updated = updated.replace(/to-(?:indigo|blue|emerald|rose|purple|cyan|amber|slate|teal|pink)-(?:500|600|700)/g, targetTheme.to);
-      updated = updated.replace(/bg-(?:indigo|blue|emerald|rose|purple|cyan|amber)-(?:500|600|700)(?!\/)/g, targetTheme.bg);
-      updated = updated.replace(/hover:bg-(?:indigo|blue|emerald|rose|purple|cyan|amber)-(?:400|500|600|700)/g, targetTheme.hover);
-      updated = updated.replace(/text-(?:indigo|blue|emerald|rose|purple|cyan|amber)-(?:300|400)/g, targetTheme.text);
-      updated = updated.replace(/ring-(?:indigo|blue|emerald|rose|purple|cyan|amber)-(?:400|500)/g, targetTheme.ring);
+      if (elementId || (targetTag && targetTag !== 'div' && targetTag !== 'article')) {
+        const targetOpen = findTargetOpenTag(updated);
+        if (targetOpen) {
+          let modifiedTag = targetOpen.text;
+          const bgRegex = /bg-(?:indigo|blue|emerald|rose|purple|cyan|amber|slate)-(?:500|600|700)(?!\/)/g;
+          const hoverRegex = /hover:bg-(?:indigo|blue|emerald|rose|purple|cyan|amber|slate)-(?:400|500|600|700)/g;
+          const textRegex = /text-(?:indigo|blue|emerald|rose|purple|cyan|amber|slate)-(?:300|400)/g;
+          const ringRegex = /ring-(?:indigo|blue|emerald|rose|purple|cyan|amber|slate)-(?:400|500)/g;
 
-      // If no bg was replaced and component has className without bg, attach bg
-      if (beforeColor === updated) {
-        if (/className=["'][^"']*["']/.test(updated)) {
-          updated = updated.replace(/className=["']([^"']*)["']/, (match, cls) => {
-            if (!cls.includes('bg-')) {
-              return `className="${cls} ${targetTheme!.bg}"`;
-            }
-            return match;
-          });
-        } else if (/<[A-Za-z][A-Za-z0-9_-]*/.test(updated)) {
-          updated = updated.replace(/(<[A-Za-z][A-Za-z0-9_-]*\b[^>]*?)(\s*\/?>)/, `$1 className="${targetTheme!.bg}"$2`);
+          if (bgRegex.test(modifiedTag) || hoverRegex.test(modifiedTag) || textRegex.test(modifiedTag)) {
+            modifiedTag = modifiedTag
+              .replace(bgRegex, targetTheme.bg)
+              .replace(hoverRegex, targetTheme.hover)
+              .replace(textRegex, targetTheme.text)
+              .replace(ringRegex, targetTheme.ring);
+          } else {
+            modifiedTag = updateTagClasses(modifiedTag, [targetTheme.bg, targetTheme.hover], [/bg-[a-z]+-\d+/]);
+          }
+
+          updated =
+            updated.substring(0, targetOpen.index) +
+            modifiedTag +
+            updated.substring(targetOpen.index + targetOpen.text.length);
+        } else {
+          updated = updated.replace(/from-(?:indigo|blue|emerald|rose|purple|cyan|amber|slate)-(?:500|600|700)/g, targetTheme.from);
+          updated = updated.replace(/to-(?:indigo|blue|emerald|rose|purple|cyan|amber|slate|teal|pink)-(?:500|600|700)/g, targetTheme.to);
+          updated = updated.replace(/bg-(?:indigo|blue|emerald|rose|purple|cyan|amber)-(?:500|600|700)(?!\/)/g, targetTheme.bg);
+          updated = updated.replace(/hover:bg-(?:indigo|blue|emerald|rose|purple|cyan|amber)-(?:400|500|600|700)/g, targetTheme.hover);
+          updated = updated.replace(/text-(?:indigo|blue|emerald|rose|purple|cyan|amber)-(?:300|400)/g, targetTheme.text);
+          updated = updated.replace(/ring-(?:indigo|blue|emerald|rose|purple|cyan|amber)-(?:400|500)/g, targetTheme.ring);
+        }
+      } else {
+        const beforeColor = updated;
+        updated = updated.replace(/from-(?:indigo|blue|emerald|rose|purple|cyan|amber|slate)-(?:500|600|700)/g, targetTheme.from);
+        updated = updated.replace(/to-(?:indigo|blue|emerald|rose|purple|cyan|amber|slate|teal|pink)-(?:500|600|700)/g, targetTheme.to);
+        updated = updated.replace(/bg-(?:indigo|blue|emerald|rose|purple|cyan|amber)-(?:500|600|700)(?!\/)/g, targetTheme.bg);
+        updated = updated.replace(/hover:bg-(?:indigo|blue|emerald|rose|purple|cyan|amber)-(?:400|500|600|700)/g, targetTheme.hover);
+        updated = updated.replace(/text-(?:indigo|blue|emerald|rose|purple|cyan|amber)-(?:300|400)/g, targetTheme.text);
+        updated = updated.replace(/ring-(?:indigo|blue|emerald|rose|purple|cyan|amber)-(?:400|500)/g, targetTheme.ring);
+
+        // If no bg was replaced and component has className without bg, attach bg
+        if (beforeColor === updated) {
+          if (/className=["'][^"']*["']/.test(updated)) {
+            updated = updated.replace(/className=["']([^"']*)["']/, (match, cls) => {
+              if (!cls.includes('bg-')) {
+                return `className="${cls} ${targetTheme!.bg}"`;
+              }
+              return match;
+            });
+          } else if (/<[A-Za-z][A-Za-z0-9_-]*/.test(updated)) {
+            updated = updated.replace(/(<[A-Za-z][A-Za-z0-9_-]*\b[^>]*?)(\s*\/?>)/, `$1 className="${targetTheme!.bg}"$2`);
+          }
         }
       }
       appliedChanges.push(`Changed color palette to ${targetTheme.name}`);
@@ -215,14 +376,83 @@ export class AiService {
 
     if (quotedMatch) {
       const newText = quotedMatch[1];
-      if (/label|button|cta|action/i.test(prompt)) {
+      if (/label|button|cta|action/i.test(prompt) || (targetTag === 'button')) {
         updated = updated.replace(/label\s*=\s*["'][^"']+["']/, `label = "${newText}"`);
         updated = updated.replace(/<span>(?:Deposit(?: Funds)?|Get Started|Learn more|Explore Component|Sign In)<\/span>/i, `<span>${newText}</span>`);
-        updated = updated.replace(/<button([^>]*)>(?:Deposit|Learn more|Sign In|Click Me)<\/button>/i, `<button$1>${newText}</button>`);
+
+        const targetOpen = findTargetOpenTag(updated);
+        if (targetOpen && targetOpen.tagName === 'button') {
+          const buttonRegex = new RegExp(`(<button\\b[^>]*>)([\\s\\S]*?)(<\\/button>)`, 'gi');
+          let m: RegExpExecArray | null;
+          let replaced = false;
+          while ((m = buttonRegex.exec(updated)) !== null) {
+            if (m.index === targetOpen.index || (targetLine !== null && Math.abs(updated.substring(0, m.index).split('\n').length - targetLine) <= 1)) {
+              const prefix = m[1];
+              const suffix = m[3];
+              let inner = m[2];
+              if (/<[A-Za-z][^>]*\/>/.test(inner)) {
+                if (/<span>[^<]*<\/span>/.test(inner)) {
+                  inner = inner.replace(/<span>[^<]*<\/span>/, `<span>${newText}</span>`);
+                } else {
+                  inner = inner.replace(/([^>]+)$/, newText);
+                }
+              } else {
+                inner = newText;
+              }
+              updated = updated.substring(0, m.index) + prefix + inner + suffix + updated.substring(m.index + m[0].length);
+              replaced = true;
+              break;
+            }
+          }
+          if (!replaced) {
+            updated = updated.replace(/<button\b([^>]*)>([^<]*)<\/button>/i, `<button$1>${newText}</button>`);
+          }
+        } else {
+          if (/<button\b[^>]*>[^<]+<\/button>/i.test(updated)) {
+            updated = updated.replace(/<button(\b[^>]*)>[^<]+<\/button>/i, `<button$1>${newText}</button>`);
+          } else {
+            updated = updated.replace(/<button([^>]*)>(?:Deposit|Learn more|Sign In|Click Me)<\/button>/i, `<button$1>${newText}</button>`);
+          }
+        }
         appliedChanges.push(`Updated button label to "${newText}"`);
-      } else if (/title|heading|name/i.test(prompt)) {
+      } else if (/title|heading|name/i.test(prompt) || (targetTag && /^h[1-6]$/.test(targetTag))) {
         updated = updated.replace(/title\s*=\s*["'][^"']+["']/, `title = "${newText}"`);
-        updated = updated.replace(/<h[1-6]([^>]*)>[^<]+<\/h[1-6]>/i, `<h3$1>${newText}</h3>`);
+
+        // Find candidate heading tags without destroying original heading tag (no h1-h6 -> h3 rewrite)
+        const headingRegex = /<(h[1-6])\b([^>]*)>([\s\S]*?)<\/\1>/gi;
+        let m: RegExpExecArray | null;
+        let chosenHeading: { index: number; full: string; tag: string; attrs: string; inner: string } | null = null;
+        let minDiff = Infinity;
+
+        while ((m = headingRegex.exec(updated)) !== null) {
+          const matchLine = updated.substring(0, m.index).split('\n').length;
+          if (targetLine !== null) {
+            const diff = Math.abs(matchLine - targetLine);
+            if (diff < minDiff) {
+              minDiff = diff;
+              chosenHeading = { index: m.index, full: m[0], tag: m[1], attrs: m[2], inner: m[3] };
+            }
+          } else if (targetTag && /^h[1-6]$/.test(targetTag)) {
+            if (m[1].toLowerCase() === targetTag) {
+              chosenHeading = { index: m.index, full: m[0], tag: m[1], attrs: m[2], inner: m[3] };
+              break;
+            }
+          } else {
+            chosenHeading = { index: m.index, full: m[0], tag: m[1], attrs: m[2], inner: m[3] };
+            break;
+          }
+        }
+
+        if (chosenHeading) {
+          const replacement = `<${chosenHeading.tag}${chosenHeading.attrs}>${newText}</${chosenHeading.tag}>`;
+          updated =
+            updated.substring(0, chosenHeading.index) +
+            replacement +
+            updated.substring(chosenHeading.index + chosenHeading.full.length);
+        } else {
+          // Fallback: preserve original heading tag
+          updated = updated.replace(/<(h[1-6])([^>]*)>[^<]+<\/\1>/i, `<$1$2>${newText}</$1>`);
+        }
         appliedChanges.push(`Updated title to "${newText}"`);
       } else if (/value|metric|number|percentage|percent/i.test(prompt)) {
         updated = updated.replace(/value\s*=\s*["'][^"']+["']/, `value = "${newText}"`);
@@ -238,17 +468,64 @@ export class AiService {
 
     // 3. Shape & Corner Radius
     if (lowerPrompt.includes('rounded-full') || lowerPrompt.includes('pill')) {
-      if (/rounded-(?:lg|xl|2xl|3xl|md|sm|none)|rounded\b/.test(updated)) {
-        updated = updated.replace(/rounded-(?:lg|xl|2xl|3xl|md|sm|none)|rounded\b/g, 'rounded-full');
+      if (elementId || (targetTag && targetTag !== 'div' && targetTag !== 'article')) {
+        const targetOpen = findTargetOpenTag(updated);
+        if (targetOpen) {
+          let newTag = targetOpen.text;
+          if (/rounded-(?:lg|xl|2xl|3xl|md|sm|none)|rounded\b/.test(newTag)) {
+            newTag = newTag.replace(/rounded-(?:lg|xl|2xl|3xl|md|sm|none)|rounded\b/g, 'rounded-full');
+          } else {
+            newTag = updateTagClasses(newTag, ['rounded-full']);
+          }
+          updated = updated.substring(0, targetOpen.index) + newTag + updated.substring(targetOpen.index + targetOpen.text.length);
+        } else if (/rounded-(?:lg|xl|2xl|3xl|md|sm|none)|rounded\b/.test(updated)) {
+          updated = updated.replace(/rounded-(?:lg|xl|2xl|3xl|md|sm|none)|rounded\b/g, 'rounded-full');
+        } else {
+          updated = updated.replace(/className=["']([^"']*)["']/, 'className="$1 rounded-full"');
+        }
       } else {
-        updated = updated.replace(/className=["']([^"']*)["']/, 'className="$1 rounded-full"');
+        if (/rounded-(?:lg|xl|2xl|3xl|md|sm|none)|rounded\b/.test(updated)) {
+          updated = updated.replace(/rounded-(?:lg|xl|2xl|3xl|md|sm|none)|rounded\b/g, 'rounded-full');
+        } else {
+          updated = updated.replace(/className=["']([^"']*)["']/, 'className="$1 rounded-full"');
+        }
       }
       appliedChanges.push('Updated corner radius to rounded-full');
     } else if (lowerPrompt.includes('rounded-none') || lowerPrompt.includes('square') || lowerPrompt.includes('sharp')) {
-      updated = updated.replace(/rounded-(?:lg|xl|2xl|3xl|md|sm|full)|rounded\b/g, 'rounded-none');
+      if (elementId || (targetTag && targetTag !== 'div' && targetTag !== 'article')) {
+        const targetOpen = findTargetOpenTag(updated);
+        if (targetOpen) {
+          let newTag = targetOpen.text;
+          if (/rounded-(?:lg|xl|2xl|3xl|md|sm|full)|rounded\b/.test(newTag)) {
+            newTag = newTag.replace(/rounded-(?:lg|xl|2xl|3xl|md|sm|full)|rounded\b/g, 'rounded-none');
+          } else {
+            newTag = updateTagClasses(newTag, ['rounded-none']);
+          }
+          updated = updated.substring(0, targetOpen.index) + newTag + updated.substring(targetOpen.index + targetOpen.text.length);
+        } else {
+          updated = updated.replace(/rounded-(?:lg|xl|2xl|3xl|md|sm|full)|rounded\b/g, 'rounded-none');
+        }
+      } else {
+        updated = updated.replace(/rounded-(?:lg|xl|2xl|3xl|md|sm|full)|rounded\b/g, 'rounded-none');
+      }
       appliedChanges.push('Updated corner radius to rounded-none');
     } else if (lowerPrompt.includes('rounded-3xl')) {
-      updated = updated.replace(/rounded-(?:lg|xl|2xl|md|sm|full)|rounded\b/g, 'rounded-3xl');
+      if (elementId || (targetTag && targetTag !== 'div' && targetTag !== 'article')) {
+        const targetOpen = findTargetOpenTag(updated);
+        if (targetOpen) {
+          let newTag = targetOpen.text;
+          if (/rounded-(?:lg|xl|2xl|md|sm|full)|rounded\b/.test(newTag)) {
+            newTag = newTag.replace(/rounded-(?:lg|xl|2xl|md|sm|full)|rounded\b/g, 'rounded-3xl');
+          } else {
+            newTag = updateTagClasses(newTag, ['rounded-3xl']);
+          }
+          updated = updated.substring(0, targetOpen.index) + newTag + updated.substring(targetOpen.index + targetOpen.text.length);
+        } else {
+          updated = updated.replace(/rounded-(?:lg|xl|2xl|md|sm|full)|rounded\b/g, 'rounded-3xl');
+        }
+      } else {
+        updated = updated.replace(/rounded-(?:lg|xl|2xl|md|sm|full)|rounded\b/g, 'rounded-3xl');
+      }
       appliedChanges.push('Updated corner radius to rounded-3xl');
     }
 
@@ -263,7 +540,22 @@ export class AiService {
 
     // 5. Border
     if (lowerPrompt.includes('border-2') || lowerPrompt.includes('thick border')) {
-      updated = updated.replace(/border /g, 'border-2 ');
+      if (elementId || (targetTag && targetTag !== 'div' && targetTag !== 'article')) {
+        const targetOpen = findTargetOpenTag(updated);
+        if (targetOpen) {
+          let newTag = targetOpen.text;
+          if (/border\b/.test(newTag)) {
+            newTag = newTag.replace(/border /g, 'border-2 ');
+          } else {
+            newTag = updateTagClasses(newTag, ['border-2']);
+          }
+          updated = updated.substring(0, targetOpen.index) + newTag + updated.substring(targetOpen.index + targetOpen.text.length);
+        } else {
+          updated = updated.replace(/border /g, 'border-2 ');
+        }
+      } else {
+        updated = updated.replace(/border /g, 'border-2 ');
+      }
       appliedChanges.push('Increased border stroke to border-2');
     }
 
@@ -276,33 +568,22 @@ export class AiService {
     }
 
     if (matchedPresets.length > 0) {
-      // Determine target tag and target line number
-      let targetTag = 'button';
-      let targetLine: number | null = null;
-      if (elementId) {
-        const parts = elementId.split('-');
-        if (parts.length > 0 && parts[0]) {
-          targetTag = parts[0].toLowerCase();
+      if (!targetTag) {
+        if (lowerPrompt.includes('badge') || lowerPrompt.includes('status')) {
+          targetTag = updated.includes('<span') ? 'span' : 'div';
+        } else if (lowerPrompt.includes('button') || lowerPrompt.includes('btn') || lowerPrompt.includes('cta')) {
+          targetTag = 'button';
+        } else if (lowerPrompt.includes('card') || lowerPrompt.includes('container')) {
+          targetTag = updated.includes('<article') ? 'article' : 'div';
+        } else if (!updated.includes('<button') && updated.includes('<article')) {
+          targetTag = 'article';
+        } else if (!updated.includes('<button') && updated.includes('<span')) {
+          targetTag = 'span';
+        } else {
+          targetTag = 'button';
         }
-        if (parts.length > 1) {
-          const parsedLine = parseInt(parts[1], 10);
-          if (!isNaN(parsedLine) && parsedLine > 0) {
-            targetLine = parsedLine;
-          }
-        }
-      } else if (lowerPrompt.includes('badge') || lowerPrompt.includes('status')) {
-        targetTag = updated.includes('<span') ? 'span' : 'div';
-      } else if (lowerPrompt.includes('button') || lowerPrompt.includes('btn') || lowerPrompt.includes('cta')) {
-        targetTag = 'button';
-      } else if (lowerPrompt.includes('card') || lowerPrompt.includes('container')) {
-        targetTag = updated.includes('<article') ? 'article' : 'div';
-      } else if (!updated.includes('<button') && updated.includes('<article')) {
-        targetTag = 'article';
-      } else if (!updated.includes('<button') && updated.includes('<span')) {
-        targetTag = 'span';
       }
 
-      // Collect all classes and conflict patterns to merge
       const classesToAdd: string[] = [];
       const conflictPatterns: RegExp[] = [];
       for (const preset of matchedPresets) {
@@ -311,43 +592,10 @@ export class AiService {
         appliedChanges.push(preset.description);
       }
 
-      // Helper function to update classes on a tag string ensuring exactly one className attribute
-      const updateTagClasses = (tagText: string): string => {
-        const classMatch = tagText.match(/\bclass(?:Name)?=["']([^"']*)["']/i);
-        if (classMatch) {
-          const existingClasses = classMatch[1];
-          const merged = mergeCleanClasses(existingClasses, classesToAdd, conflictPatterns);
-          return tagText.replace(/\bclass(?:Name)?=["'][^"']*["']/i, `className="${merged}"`);
-        }
-        if (/\s*\/>$/.test(tagText)) {
-          return tagText.replace(/\s*\/>$/, ` className="${classesToAdd.join(' ')}" />`);
-        }
-        return tagText.replace(/\s*>$/, ` className="${classesToAdd.join(' ')}">`);
-      };
-
-      // Find candidate tags matching targetTag
-      const openTagRegex = new RegExp(`(<${targetTag}\\b[^>]*?>)`, 'gi');
-      let match: RegExpExecArray | null;
-      let chosenMatch: { index: number; text: string } | null = null;
-      let minLineDiff = Infinity;
-
-      while ((match = openTagRegex.exec(updated)) !== null) {
-        const matchIndex = match.index;
-        const matchLine = updated.substring(0, matchIndex).split('\n').length;
-        if (targetLine !== null) {
-          const diff = Math.abs(matchLine - targetLine);
-          if (diff < minLineDiff) {
-            minLineDiff = diff;
-            chosenMatch = { index: matchIndex, text: match[0] };
-          }
-        } else {
-          chosenMatch = { index: matchIndex, text: match[0] };
-          break;
-        }
-      }
+      const chosenMatch = findTargetOpenTag(updated);
 
       if (chosenMatch) {
-        const newTag = updateTagClasses(chosenMatch.text);
+        const newTag = updateTagClasses(chosenMatch.text, classesToAdd, conflictPatterns);
         updated =
           updated.substring(0, chosenMatch.index) +
           newTag +
@@ -407,6 +655,7 @@ export class AiService {
    */
   private generateSmartLocalRedesign(request: RedesignRequest): RedesignResponse {
     const { prompt, originalCode, wcagFixRequested } = request;
+    const effectiveFramework = request.targetFramework || 'react-tailwind';
     const lowerPrompt = prompt.toLowerCase();
 
     // Check if prompt is an iterative modification of an existing component or snippet
@@ -454,7 +703,7 @@ export class AiService {
       return {
         analysis: `Updated component styling according to prompt: "${prompt}". Preserved accessibility standards and component contract.`,
         redesignedCode: modResult.modifiedCode,
-        framework: 'react-tailwind',
+        framework: effectiveFramework,
         explanation: `Applied modifications based on your prompt: ${modResult.appliedChanges.join(', ') || 'Updated styling'}.`,
         accessibilityImprovements: [
           'Maintained accessible contrast and responsive hit-targets.',
@@ -737,7 +986,7 @@ export const FeatureCard: React.FC<CardProps> = ({
     return {
       analysis: `Analyzed UI intent: "${prompt}". Designed a high-fidelity modern component following Tailwind CSS best practices and WCAG 2.2 accessibility guidelines.`,
       redesignedCode,
-      framework: 'react-tailwind',
+      framework: effectiveFramework,
       explanation: `I redesigned your component with contemporary UI/UX best practices:
 1. **Visual Depth & Polish:** Applied a soft glassmorphism layer with subtle border illumination and subtle hover elevation.
 2. **Typography & Hierarchy:** Refined font weights and leading for effortless readability.

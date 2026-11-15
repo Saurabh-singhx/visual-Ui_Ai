@@ -16,6 +16,13 @@
     "test": "npm run test:server && npm run test:client",
     "build": "cd client && npm run build && cd ../server && npm run build"
   },
+  "dependencies": {
+    "picomatch": "^4.0.7"
+  },
+  "devDependencies": {
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  },
   "keywords": [
     "ui-ux",
     "ai",

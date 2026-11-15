@@ -123,6 +123,30 @@ export interface ScanResult {
   exceedsThreshold: boolean;
   folderBreakdown: Record<string, number>;
   suggestedFocus?: string[];
+  detectedPlatform?: 'web' | 'mobile' | 'desktop';
+  detectedFramework?: string;
+  targetDevice?: 'mobile' | 'desktop';
+  viewport?: { width: number; height: number };
+}
+
+export interface ProjectContext {
+  detectedPlatform: 'web' | 'mobile' | 'desktop';
+  detectedFramework: string;
+  targetDevice: 'mobile' | 'desktop';
+  viewport: { width: number; height: number };
+}
+
+export interface WorkspaceInfo {
+  success: boolean;
+  platform: string;
+  sampleWorkspacePath: string;
+  workspaceDir?: string;
+  focusFile?: string;
+  skillMode?: boolean;
+  targetDevice?: 'mobile' | 'tablet' | 'desktop';
+  targetPlatform?: 'web' | 'mobile' | 'desktop' | 'workspace';
+  detectedPlatform?: 'web' | 'mobile' | 'desktop';
+  detectedFramework?: string;
 }
 
 export interface ElementDetail {

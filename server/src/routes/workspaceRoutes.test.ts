@@ -332,4 +332,74 @@ export const TestButton = () => {
       expect(res.body.activeComponent.code).toContain('TestButton');
     });
   });
+
+  // 7. Continuous Visual UI Bridge Endpoints (Sprint 3)
+  describe('Continuous Visual UI Bridge Endpoints', () => {
+    const feedbackDir = path.resolve(process.env.WORKSPACE_DIR || process.cwd(), '.ui-feedback');
+    const queueDir = path.join(feedbackDir, 'queue');
+    const sessionLockFile = path.join(feedbackDir, 'session.lock');
+
+    afterEach(() => {
+      fs.rmSync(queueDir, { recursive: true, force: true });
+      if (fs.existsSync(sessionLockFile)) fs.unlinkSync(sessionLockFile);
+    });
+
+    it('POST /api/bridge/select writes atomic queue file and returns success', async () => {
+      const payload = {
+        element: { selector: '#hero', componentHint: 'HeroCard' },
+        instruction: 'Make it orange',
+      };
+
+      const res = await request(app)
+        .post('/api/bridge/select')
+        .send(payload);
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.id).toBeDefined();
+
+      const files = fs.readdirSync(queueDir).filter((f) => f.endsWith('.json'));
+      expect(files.length).toBe(1);
+      const content = JSON.parse(fs.readFileSync(path.join(queueDir, files[0]), 'utf8'));
+      expect(content.element.selector).toBe('#hero');
+    });
+
+    it('POST /__agy_ui_bridge/select writes atomic queue file', async () => {
+      const payload = {
+        element: { selector: '.btn' },
+        instruction: 'Add border',
+      };
+
+      const res = await request(app)
+        .post('/__agy_ui_bridge/select')
+        .send(payload);
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+    });
+
+    it('GET /api/bridge/status returns session lock state and queue counts', async () => {
+      fs.writeFileSync(sessionLockFile, JSON.stringify({ active: true, pid: 1234 }), 'utf8');
+
+      const res = await request(app).get('/api/bridge/status');
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.sessionActive).toBe(true);
+    });
+
+    it('POST /api/bridge/select with status=done cleans up session.lock', async () => {
+      fs.writeFileSync(sessionLockFile, JSON.stringify({ active: true }), 'utf8');
+      expect(fs.existsSync(sessionLockFile)).toBe(true);
+
+      const res = await request(app)
+        .post('/api/bridge/select')
+        .send({ status: 'done' });
+
+      expect(res.status).toBe(200);
+      expect(fs.existsSync(sessionLockFile)).toBe(false);
+
+      const statusRes = await request(app).get('/api/bridge/status');
+      expect(statusRes.body.sessionActive).toBe(false);
+    });
+  });
 });
